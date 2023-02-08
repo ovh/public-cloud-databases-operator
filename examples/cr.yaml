@@ -1,0 +1,15 @@
+{
+        "apiVersion": "clouddatabases.ovhcloud.net/v1alpha1",
+        "kind": "services",
+        "metadata": {
+          "name": "XXXX",
+          "namespace": "XXXX"
+        },
+        "spec": {
+          "projectId": "XXXX",
+          "serviceId": "XXXX",
+          "labelSelector": # No label selector means apply on all nodes
+            "matchLabels":
+              "LABELNAME": "LABELVALUE"
+        },
+}

@@ -1,0 +1,7 @@
+ovhCredentials:
+  applicationKey: XXXX
+  applicationSecret: XXXX
+  consumerKey: XXXX
+  region: XXXX
+
+namespace: XXXX #Your Kubernetes namespace

@@ -1,0 +1,19 @@
+domain: clouddatabases.ovhcloud.net
+layout:
+- go.kubebuilder.io/v3
+plugins:
+  manifests.sdk.operatorframework.io/v2: {}
+  scorecard.sdk.operatorframework.io/v2: {}
+projectName: public-cloud-databases-operator
+repo: github.com/ovh/public-cloud-databases-operator
+resources:
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: clouddatabases.ovhcloud.net
+  group: service
+  kind: service
+  path: github.com/ovh/public-cloud-databases-operator/api/v1alpha1
+  version: v1alpha1
+version: "3"

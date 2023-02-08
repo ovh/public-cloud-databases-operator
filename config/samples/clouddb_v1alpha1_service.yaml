@@ -1,0 +1,14 @@
+apiVersion: service.clouddatabases.ovhcloud.net/v1alpha1
+kind: service
+metadata:
+  labels:
+    app.kubernetes.io/name: service
+    app.kubernetes.io/instance: service-sample
+    app.kubernetes.io/part-of: project
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/created-by: project
+  name: service-sample
+spec:
+  nic: niccustomer
+  projectId: someProjectId
+  serviceId: someServiceId 

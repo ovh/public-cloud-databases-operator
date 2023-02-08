@@ -1,0 +1,39 @@
+# The GroupName here is used to identify your company or business unit that
+# created this webhook.
+# For example, this may be "acme.mycompany.example".
+# This name will need to be referenced in each Issuer's `webhook` stanza to
+# inform cert-manager of where to send ChallengePayload resources in order to
+# solve the DNS01 challenge.
+# This group name should be **unique**, hence using your own company's domain
+# here is recommended.
+
+replicaCount: 1
+
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  repository: clouddb/public-cloud-databases-operator
+  tag: latest
+  pullPolicy: IfNotPresent
+
+imagePullSecrets:
+  - name: registry
+
+ovhCredentials: ""
+applicationKey: ""
+applicationSecret: ""
+consumerKey: ""
+region: ""
+
+
+resources: {}
+
+namespace: test
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
+

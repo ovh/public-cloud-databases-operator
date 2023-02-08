@@ -1,0 +1,33 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  creationTimestamp: null
+  name: manager-role
+rules:
+- apiGroups:
+  - service.clouddatabases.ovhcloud.net
+  resources:
+  - services
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - service.clouddatabases.ovhcloud.net
+  resources:
+  - services/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - service.clouddatabases.ovhcloud.net
+  resources:
+  - services/status
+  verbs:
+  - get
+  - patch
+  - update
