@@ -24,7 +24,7 @@ import (
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
 // serviceSpec defines the desired state of service
-type serviceSpec struct {
+type ServiceSpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
 	// ProjectId is the Id of the project on which ips are to be autorized
@@ -36,7 +36,7 @@ type serviceSpec struct {
 }
 
 // serviceStatus defines the observed state of service
-type serviceStatus struct {
+type ServiceStatus struct {
 	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
 }
@@ -45,23 +45,23 @@ type serviceStatus struct {
 //+kubebuilder:subresource:status
 
 // service is the Schema for the services API
-type service struct {
+type Service struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   serviceSpec   `json:"spec,omitempty"`
-	Status serviceStatus `json:"status,omitempty"`
+	Spec   ServiceSpec   `json:"spec,omitempty"`
+	Status ServiceStatus `json:"status,omitempty"`
 }
 
 //+kubebuilder:object:root=true
 
 // serviceList contains a list of service
-type serviceList struct {
+type ServiceList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
-	Items           []service `json:"items"`
+	Items           []Service `json:"items"`
 }
 
 func init() {
-	SchemeBuilder.Register(&service{}, &serviceList{})
+	SchemeBuilder.Register(&Service{}, &ServiceList{})
 }

@@ -107,7 +107,7 @@ func main() {
 		setupLog.Error(err, "unable to instantiate ovh api client")
 		os.Exit(1)
 	}
-	if err = (&controllers.DatabaseAuthorizationReconciler{
+	if err = (&controllers.ServiceReconciler{
 		Client:    mgr.GetClient(),
 		Scheme:    mgr.GetScheme(),
 		OvhClient: *ovhClient,

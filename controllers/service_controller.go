@@ -23,7 +23,6 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/ovh/go-ovh/ovh"
 	"github.com/ovh/public-cloud-databases-operator/api/v1alpha1"
-	servicev1alpha1 "github.com/ovh/public-cloud-databases-operator/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -56,7 +55,8 @@ func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	logger := r.Log.WithValues("req", req)
 	logger.Info("reconcile")
 
-	serviceList := &v1alpha1.serviceList{}
+	//v1alpha1.SchemeBuilder.
+	serviceList := &v1alpha1.ServiceList{}
 	err := r.List(ctx, serviceList)
 	if err != nil {
 		logger.Info("failed to list crd", "error", err)
@@ -97,7 +97,7 @@ func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	return ctrl.Result{}, nil
 }
 
-func (r *ServiceReconciler) ProcessIpAuthorizationForOneService(ctx context.Context, crd v1alpha1.service, nodes corev1.NodeList, projectId string, serviceId string) error {
+func (r *ServiceReconciler) ProcessIpAuthorizationForOneService(ctx context.Context, crd v1alpha1.Service, nodes corev1.NodeList, projectId string, serviceId string) error {
 
 	ips, engine, err := ListAuthorizedIps(ctx, r, projectId, serviceId)
 	if err != nil {
@@ -134,7 +134,7 @@ func (r *ServiceReconciler) ProcessIpAuthorizationForOneService(ctx context.Cont
 func (r *ServiceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&servicev1alpha1.Service{}).
+		For(&v1alpha1.Service{}).
 		For(&corev1.Node{}).
 		Complete(r)
 }
