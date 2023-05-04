@@ -135,7 +135,7 @@ func (r *ServiceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.Service{}).
-		For(&corev1.Node{}).
+		Owns(&corev1.Node{}).
 		Complete(r)
 }
 
