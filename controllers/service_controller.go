@@ -34,7 +34,7 @@ type ServiceReconciler struct {
 	client.Client
 	Scheme    *runtime.Scheme
 	Log       logr.Logger
-	OvhClient ovh.Client
+	OvhClient *ovh.Client
 }
 
 //+kubebuilder:rbac:groups=service.clouddb.ovhcloud.net,resources=services,verbs=get;list;watch;create;update;patch;delete
@@ -62,30 +62,39 @@ func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		logger.Info("failed to list crd", "error", err)
 		return ctrl.Result{}, err
 	}
-
 	for _, crd := range serviceList.Items {
-		opts := []client.ListOption{
-			client.InNamespace(req.NamespacedName.Namespace),
-		}
+		logger.Info(fmt.Sprintf("spec: %v", crd.Spec))
+		logger.Info(fmt.Sprintf("match labels: %v", crd.Spec.LabelSelector.MatchLabels))
+	}
+	for _, crd := range serviceList.Items {
+		opts := []client.ListOption{}
 		for k, v := range crd.Spec.LabelSelector.MatchLabels {
-			opts = append(opts, client.MatchingFields{k: v})
+			opts = append(opts, client.MatchingLabels{k: v})
 		}
 
 		nodes := &corev1.NodeList{}
+		logger.Info(fmt.Sprintf("opts: %v", opts))
 		err = r.List(ctx, nodes, opts...)
+
 		if err != nil {
 			logger.Info("failed to list nodes", "error", err)
 			return ctrl.Result{}, err
 		}
+		logger.Info(fmt.Sprintf("nodes count: %v", len(nodes.Items)))
+
 		// check if there is a wildcard on service id, then process on all the services of the project
 		if crd.Spec.ServiceId == "" {
 			servicesIds, err := GetServicesForProjectId(ctx, r, crd.Spec.ProjectId)
+			logger.Info(fmt.Sprintf("serviceids: %v, projectid: %s", servicesIds, crd.Spec.ProjectId))
 			if err != nil {
 				logger.Info("failed to list services from project id", "error", err)
 				return ctrl.Result{}, err
 			}
 			for _, serviceId := range servicesIds {
-				r.ProcessIpAuthorizationForOneService(ctx, crd, *nodes, crd.Spec.ProjectId, serviceId)
+				logger.Info(fmt.Sprintf("before process: %v", serviceId))
+				if err := r.ProcessIpAuthorizationForOneService(ctx, crd, *nodes, crd.Spec.ProjectId, serviceId); err != nil {
+					return ctrl.Result{}, err
+				}
 			}
 		} else {
 			if err := r.ProcessIpAuthorizationForOneService(ctx, crd, *nodes, crd.Spec.ProjectId, crd.Spec.ServiceId); err != nil {
@@ -99,7 +108,12 @@ func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 func (r *ServiceReconciler) ProcessIpAuthorizationForOneService(ctx context.Context, crd v1alpha1.Service, nodes corev1.NodeList, projectId string, serviceId string) error {
 
-	ips, engine, err := ListAuthorizedIps(ctx, r, projectId, serviceId)
+	engine, err := GetEngineForServiceId(ctx, r, projectId, serviceId)
+	if err != nil {
+		r.Log.Info("failed to get service engine", "error", err)
+		return err
+	}
+	ips, err := ListAuthorizedIps(ctx, r, projectId, serviceId)
 	if err != nil {
 		r.Log.Info("failed to list nodes", "error", err)
 		return err
@@ -107,24 +121,25 @@ func (r *ServiceReconciler) ProcessIpAuthorizationForOneService(ctx context.Cont
 
 	nodesMap := make(map[string]*corev1.Node)
 	for _, node := range nodes.Items {
-		for k, v := range crd.Spec.LabelSelector.MatchLabels {
-			if node.Labels[k] == v {
-				nodesMap[getExternalAddress(node)] = &node
-				break
-			}
-		}
+		nodesMap[getInternalAddress(node)+Mask] = &node
 	}
 
 	for _, ip := range ips {
-		if nodesMap[ip] != nil {
-			description := fmt.Sprintf("K8S-CDB-Operator_%s_%s_%s", nodesMap[ip].Name, crd.UID, nodesMap[ip].UID)
-			if err := AuthorizeNodeIp(ctx, r, projectId, serviceId, engine, ip, description); err != nil {
+		if nodesMap[ip] == nil {
+			if err := UnauthorizeNodeIp(ctx, r, projectId, serviceId, engine, ip); err != nil {
+				r.Log.Info("failed to unauthorize ip", "error", err)
 				return err
 			}
 		} else {
-			if err := UnauthorizeNodeIp(ctx, r, projectId, serviceId, engine, ip); err != nil {
-				return err
-			}
+			delete(nodesMap, ip)
+		}
+	}
+
+	for nodeAddress, node := range nodesMap {
+		description := fmt.Sprintf("K8S-CDB-Operator_%s_%s_%s", node.Name, crd.UID, node.UID)
+		if err := AuthorizeNodeIp(ctx, r, projectId, serviceId, engine, nodeAddress, description); err != nil {
+			r.Log.Info("failed to authorize ip", "error", err)
+			return err
 		}
 	}
 	return nil
@@ -132,16 +147,21 @@ func (r *ServiceReconciler) ProcessIpAuthorizationForOneService(ctx context.Cont
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *ServiceReconciler) SetupWithManager(mgr ctrl.Manager) error {
-
+	/*if err := mgr.GetFieldIndexer().IndexField(context.Background(), &corev1.Node{}, "metadata.labels.label", func(rawObj client.Object) []string {
+		node := rawObj.(*corev1.Node)
+		return []string{node.Labels["label"]}
+	}); err != nil {
+		return err
+	}*/
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.Service{}).
 		Owns(&corev1.Node{}).
 		Complete(r)
 }
 
-func getExternalAddress(node corev1.Node) string {
+func getInternalAddress(node corev1.Node) string {
 	for _, address := range node.Status.Addresses {
-		if address.Type == "ExternalIP" {
+		if address.Type == "InternalIP" {
 			return address.Address
 		}
 	}
