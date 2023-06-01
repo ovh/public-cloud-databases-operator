@@ -1,0 +1,12 @@
+apiVersion: cloud.ovh.net/v1alpha1
+kind: Database
+metadata:
+  labels:
+    app.kubernetes.io/name: database
+    app.kubernetes.io/instance: database-sample
+    app.kubernetes.io/part-of: public-cloud-databases-operator-3
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/created-by: public-cloud-databases-operator-3
+  name: database-sample
+spec:
+  # TODO(user): Add fields here

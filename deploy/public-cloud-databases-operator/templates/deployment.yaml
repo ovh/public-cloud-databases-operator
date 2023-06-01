@@ -1,0 +1,80 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "public-cloud-databases-operator.fullname" . }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: {{ include "public-cloud-databases-operator.name" . }}
+    chart: {{ include "public-cloud-databases-operator.chart" . }}
+    release: {{ .Release.Name }}
+    heritage: {{ .Release.Service }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: {{ include "public-cloud-databases-operator.name" . }}
+      release: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app: {{ include "public-cloud-databases-operator.name" . }}
+        release: {{ .Release.Name }}
+    spec:
+      serviceAccountName: {{ include "public-cloud-databases-operator.fullname" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: {{ .Chart.Name }}
+          image: "{{ .Values.image.repository }}:{{ default .Chart.AppVersion .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              scheme: HTTP
+              path: /metrics
+              port: http
+          readinessProbe:
+            httpGet:
+              scheme: HTTP
+              path: /metrics
+              port: http
+          resources:
+          {{- toYaml .Values.resources | nindent 12 }}
+          env:
+            - name: REGION
+              valueFrom:
+                secretKeyRef:
+                  name: ovh-credentials
+                  key: region
+            - name: APPLICATION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: ovh-credentials
+                  key: applicationKey
+            - name: APPLICATION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: ovh-credentials
+                  key: applicationSecret
+            - name: CONSUMER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: ovh-credentials
+                  key: consumerKey
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+      {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+      {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+      {{- toYaml . | nindent 8 }}
+      {{- end }}
