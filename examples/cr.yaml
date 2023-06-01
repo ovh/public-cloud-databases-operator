@@ -1,0 +1,11 @@
+apiVersion: cloud.ovh.net/v1alpha1
+kind: Database
+metadata:
+  name: XXXX
+  namespace: XXXX
+spec:
+  projectId: XXXX
+  serviceId: XXX
+  labelSelector:
+    matchLabels:
+      LABELNAME: LABELVALUE

@@ -19,6 +19,7 @@ package main
 import (
 	"flag"
 	"os"
+	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -31,6 +32,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
+	"github.com/ovh/go-ovh/ovh"
 	cloudv1alpha1 "github.com/ovh/public-cloud-databases-operator/api/v1alpha1"
 	"github.com/ovh/public-cloud-databases-operator/controllers"
 	//+kubebuilder:scaffold:imports
@@ -65,7 +67,9 @@ func main() {
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
+	syncPeriod := 30 * time.Minute
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
+		SyncPeriod:             &syncPeriod,
 		Scheme:                 scheme,
 		MetricsBindAddress:     metricsAddr,
 		Port:                   9443,
@@ -89,9 +93,28 @@ func main() {
 		os.Exit(1)
 	}
 
+	//secrets management
+	region := os.Getenv("REGION")
+	applicationKey := os.Getenv("APPLICATION_KEY")
+	applicationSecret := os.Getenv("APPLICATION_SECRET")
+	consumerKey := os.Getenv("CONSUMER_KEY")
+
+	ovhClient, err := ovh.NewClient(
+		region,
+		applicationKey,
+		applicationSecret,
+		consumerKey,
+	)
+	if err != nil {
+		setupLog.Error(err, "unable to instantiate ovh api client")
+		os.Exit(1)
+	}
+
 	if err = (&controllers.DatabaseReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:    mgr.GetClient(),
+		Scheme:    mgr.GetScheme(),
+		Log:       ctrl.Log.WithName("controllers").WithName("Service"),
+		OvhClient: ovhClient,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Database")
 		os.Exit(1)

@@ -1,94 +1,96 @@
-# public-cloud-databases-operator-3
-// TODO(user): Add simple overview of use/purpose
+# public-cloud-databases-operator
+ 
+This operator allow you to automaticaly authorize your Kubernetes cluster IP on your OVHcloud cloud databases service.
 
-## Description
-// TODO(user): An in-depth paragraph about your project and overview of use
+## Ovh Credentials
+The operator needs a secret that contains the credentials to call Ovhcloud api. Go to https://api.ovh.com/createToken/ to generate the credentials namely:
+- application key
+- application secret
+- consumer key
 
-## Getting Started
-You’ll need a Kubernetes cluster to run against. You can use [KIND](https://sigs.k8s.io/kind) to get a local cluster for testing, or run against a remote cluster.
-**Note:** Your controller will automatically use the current context in your kubeconfig file (i.e. whatever cluster `kubectl cluster-info` shows).
+## Values
+Create a values.yaml to be injected in the helm chart 
+that will be created afterwards. Region is either: ovh-eu, ovh-ca or ovh-us.
+You can find the file in /examples.
+```yaml
+ovhCredentials:
+  applicationKey: XXXX
+  applicationSecret: XXXX
+  consumerKey: XXXX
+  region: XXXX
 
-### Running on the cluster
-1. Install Instances of Custom Resources:
-
-```sh
-kubectl apply -f config/samples/
+namespace: XXXX #Your Kubernetes namespace
 ```
 
-2. Build and push your image to the location specified by `IMG`:
+## Installation
+Use the kubernetes package manager [helm](https://helm.sh) and the values file you created to install the operator.
 
-```sh
-make docker-build docker-push IMG=<some-registry>/public-cloud-databases-operator-3:tag
+```bash
+helm install -f values.yaml public-cloud-databases-operator oci://registry-1.docker.io/ovhcom/public-cloud-databases-operator --version 3
+```
+That will create the operator, crd and secrets.
+ ```bash
+kubectl get deploy
+NAME                                       READY   UP-TO-DATE   AVAILABLE   AGE
+operator-public-cloud-databases-operator   1/1     1            1           11h
+
+kubectl get crd databases.cloud.ovh.net
+NAME                      CREATED AT
+databases.cloud.ovh.net   2023-06-01T14:20:09Z
+
+kubectl get secret ovh-credentials
+NAME              TYPE     DATA   AGE
+ovh-credentials   Opaque   4      12m
 ```
 
-3. Deploy the controller to the cluster with the image specified by `IMG`:
-
-```sh
-make deploy IMG=<some-registry>/public-cloud-databases-operator-3:tag
+## Create Custom Resource
+Create a custom resource object using this example file.
+You can find the file in /examples.
+```yaml
+apiVersion: cloud.ovh.net/v1alpha1
+kind: Database
+metadata:
+  name: XXXX
+  namespace: XXXX
+spec:
+  projectId: XXXX
+  serviceId: XXX
+  labelSelector:
+    matchLabels:
+      LABELNAME: LABELVALUE
 ```
 
-### Uninstall CRDs
-To delete the CRDs from the cluster:
+The field serviceId is optional. If not set, the operator will be run against all the services of your project.
 
-```sh
-make uninstall
+```bash
+kubectl apply -f cr.yaml
 ```
 
-### Undeploy controller
-UnDeploy the controller from the cluster:
+# Nodes Labels
+You can use kubernetes labeling in order to select specific nodes that you want the operator to be run against. 
+The created CR and the node must have the same label and value.
 
-```sh
-make undeploy
+```bash
+kubectl label nodes NODENAME1 NODENAME2 ... LABELNAME=LABELVALUE
 ```
 
-## Contributing
-// TODO(user): Add detailed information on how you would like others to contribute to this project
+# Related links
+ 
+ * Contribute: https://github.com/ovh/public-cloud-databases-operator/blob/master/CONTRIBUTING.md
+ * Report bugs: https://github.com/ovh/public-cloud-databases-operator/issues
 
-### How it works
-This project aims to follow the Kubernetes [Operator pattern](https://kubernetes.io/docs/concepts/extend-kubernetes/operator/).
-
-It uses [Controllers](https://kubernetes.io/docs/concepts/architecture/controller/),
-which provide a reconcile function responsible for synchronizing resources until the desired state is reached on the cluster.
-
-### Test It Out
-1. Install the CRDs into the cluster:
-
-```sh
-make install
-```
-
-2. Run your controller (this will run in the foreground, so switch to a new terminal if you want to leave it running):
-
-```sh
-make run
-```
-
-**NOTE:** You can also run this in one step by running: `make install run`
-
-### Modifying the API definitions
-If you are editing the API definitions, generate the manifests such as CRs or CRDs using:
-
-```sh
-make manifests
-```
-
-**NOTE:** Run `make --help` for more information on all potential `make` targets
-
-More information can be found via the [Kubebuilder Documentation](https://book.kubebuilder.io/introduction.html)
-
-## License
-
-Copyright 2023.
-
+# License
+ 
+Copyright 2021 OVH SAS
+ 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
-
+ 
     http://www.apache.org/licenses/LICENSE-2.0
-
+ 
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
-

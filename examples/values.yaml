@@ -1,0 +1,12 @@
+image:
+  repository: ovhcom/public-cloud-databases-operator
+  tag: latest
+  pullPolicy: IfNotPresent
+
+ovhCredentials:
+  applicationKey: XXXX
+  applicationSecret: XXXX
+  consumerKey: XXXX
+  region: XXXX
+
+namespace: XXXX #Your Kubernetes namespace

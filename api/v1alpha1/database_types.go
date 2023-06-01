@@ -35,7 +35,7 @@ type DatabaseSpec struct {
 	ServiceId string `json:"serviceId,omitempty"`
 
 	// LabelSelector define which node to authorize on the specified service
-	LabelSelector metav1.LabelSelector `json:"labelSelector,omitempty"`
+	LabelSelector *metav1.LabelSelector `json:"labelSelector,omitempty"`
 }
 
 // DatabaseStatus defines the observed state of Database

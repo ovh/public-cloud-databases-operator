@@ -64,12 +64,16 @@ func (r *DatabaseReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	}
 	for _, crd := range serviceList.Items {
 		logger.Info(fmt.Sprintf("spec: %v", crd.Spec))
-		logger.Info(fmt.Sprintf("match labels: %v", crd.Spec.LabelSelector.MatchLabels))
+		if crd.Spec.LabelSelector != nil {
+			logger.Info(fmt.Sprintf("match labels: %v", crd.Spec.LabelSelector.MatchLabels))
+		}
 	}
 	for _, crd := range serviceList.Items {
 		opts := []client.ListOption{}
-		for k, v := range crd.Spec.LabelSelector.MatchLabels {
-			opts = append(opts, client.MatchingLabels{k: v})
+		if crd.Spec.LabelSelector != nil {
+			for k, v := range crd.Spec.LabelSelector.MatchLabels {
+				opts = append(opts, client.MatchingLabels{k: v})
+			}
 		}
 
 		nodes := &corev1.NodeList{}
