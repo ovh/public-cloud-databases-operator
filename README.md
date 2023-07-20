@@ -8,6 +8,11 @@ The operator needs a secret that contains the credentials to call Ovhcloud api. 
 - application secret
 - consumer key
 
+Define the credentials ACL in order to be able to make these requests:
+- GET /cloud/project/:projectID/database/service
+- GET /cloud/project/:projectID/database/service/:serviceId
+- PUT /cloud/project/:projectID/database/:engine/:serviceId
+
 ## Values
 Create a values.yaml to be injected in the helm chart 
 that will be created afterwards. Region is either: ovh-eu, ovh-ca or ovh-us.
