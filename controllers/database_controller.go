@@ -19,6 +19,7 @@ package controllers
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -34,7 +35,6 @@ import (
 type DatabaseReconciler struct {
 	client.Client
 	Scheme    *runtime.Scheme
-	Log       logr.Logger
 	OvhClient *ovh.Client
 }
 
@@ -52,36 +52,33 @@ type DatabaseReconciler struct {
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.14.1/pkg/reconcile
 func (r *DatabaseReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	logger := r.Log.WithValues("req", req)
-	logger.Info("reconcile")
+	logger := ctrl.Log.WithName("controllers").WithName("Service").WithValues("req", req)
+	logger.V(1).Info("reconcile")
 
 	//v1alpha1.SchemeBuilder.
 	serviceList := &v1alpha1.DatabaseList{}
 	err := r.List(ctx, serviceList)
 	if err != nil {
-		logger.Info("failed to list crd", "error", err)
+		logger.Error(err, "failed to list crd")
 		return ctrl.Result{}, err
 	}
 	for _, crd := range serviceList.Items {
-		logger.Info(fmt.Sprintf("spec: %v", crd.Spec))
-		if crd.Spec.LabelSelector != nil {
-			logger.Info(fmt.Sprintf("match labels: %v", crd.Spec.LabelSelector.MatchLabels))
-		}
-	}
-	for _, crd := range serviceList.Items {
+		logger.V(1).Info(fmt.Sprintf("spec: %v", crd.Spec))
+		logger := logger.WithValues("project_id", crd.Spec.ProjectId)
 		opts := []client.ListOption{}
 		if crd.Spec.LabelSelector != nil {
+			logger.V(1).Info(fmt.Sprintf("match labels: %v", crd.Spec.LabelSelector.MatchLabels))
 			for k, v := range crd.Spec.LabelSelector.MatchLabels {
 				opts = append(opts, client.MatchingLabels{k: v})
 			}
 		}
 
 		nodes := &corev1.NodeList{}
-		logger.Info(fmt.Sprintf("opts: %v", opts))
+		logger.V(1).Info(fmt.Sprintf("opts: %v", opts))
 		err = r.List(ctx, nodes, opts...)
 
 		if err != nil {
-			logger.Info("failed to list nodes", "error", err)
+			logger.Error(err, "failed to list nodes")
 			return ctrl.Result{}, err
 		}
 		logger.Info(fmt.Sprintf("nodes count: %v", len(nodes.Items)))
@@ -89,21 +86,28 @@ func (r *DatabaseReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		// check if there is a wildcard on service id, then process on all the services of the project
 		if crd.Spec.ServiceId == "" {
 			servicesIds, err := GetServicesForProjectId(ctx, r, crd.Spec.ProjectId)
-			logger.Info(fmt.Sprintf("serviceids: %v, projectid: %s", servicesIds, crd.Spec.ProjectId))
+			logger.Info(fmt.Sprintf("serviceIDs %v", servicesIds))
 			if err != nil {
-				logger.Info("failed to list services from project id", "error", err)
+				logger.Error(err, "failed to list services from project id")
 				return ctrl.Result{}, err
 			}
 			for _, serviceId := range servicesIds {
-				logger.Info(fmt.Sprintf("before process: %v", serviceId))
-				if err := r.ProcessIpAuthorizationForOneService(ctx, crd, *nodes, crd.Spec.ProjectId, serviceId); err != nil {
+				logger := logger.WithValues("service_id", serviceId)
+				logger.V(1).Info("processing")
+				if err := r.ProcessIpAuthorizationForOneService(logr.NewContext(ctx, logger), crd, *nodes, crd.Spec.ProjectId, serviceId); err != nil {
+					logger.Error(err, "failed to process ip authorization")
 					return ctrl.Result{}, err
 				}
+				logger.V(1).Info("done processing")
 			}
 		} else {
-			if err := r.ProcessIpAuthorizationForOneService(ctx, crd, *nodes, crd.Spec.ProjectId, crd.Spec.ServiceId); err != nil {
+			logger := logger.WithValues("service_id", crd.Spec.ServiceId)
+			logger.V(1).Info("processing")
+			if err := r.ProcessIpAuthorizationForOneService(logr.NewContext(ctx, logger), crd, *nodes, crd.Spec.ProjectId, crd.Spec.ServiceId); err != nil {
+				logger.Error(err, "failed to process ip authorization")
 				return ctrl.Result{}, err
 			}
+			logger.V(1).Info("done processing")
 		}
 	}
 
@@ -111,42 +115,30 @@ func (r *DatabaseReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 }
 
 func (r *DatabaseReconciler) ProcessIpAuthorizationForOneService(ctx context.Context, crd v1alpha1.Database, nodes corev1.NodeList, projectId string, serviceId string) error {
-
-	engine, err := GetEngineForServiceId(ctx, r, projectId, serviceId)
+	logger := logr.FromContextOrDiscard(ctx)
+	cluster, err := GetCluster(ctx, r, projectId, serviceId)
 	if err != nil {
-		r.Log.Info("failed to get service engine", "error", err)
 		return err
 	}
-	ips, err := ListAuthorizedIps(ctx, r, projectId, serviceId)
-	if err != nil {
-		r.Log.Info("failed to list nodes", "error", err)
-		return err
-	}
+	logger.V(1).Info(fmt.Sprintf("Old IPs: %+v", cluster.Ips))
 
-	nodesMap := make(map[string]*corev1.Node)
+	newIPs := make([]IpRestriction, 0)
+	nodesMap := make(map[string]struct{})
 	for _, node := range nodes.Items {
-		nodesMap[getInternalAddress(node)+Mask] = &node
+		ip := getInternalAddress(node) + Mask
+		nodesMap[ip] = struct{}{}
+		newIPs = append(newIPs, IpRestriction{IP: ip, Description: fmt.Sprintf("K8S-CDB-Operator_%s_%s_%s", node.Name, crd.UID, node.UID)})
 	}
 
-	for _, ip := range ips {
-		if nodesMap[ip] == nil {
-			if err := UnauthorizeNodeIp(ctx, r, projectId, serviceId, engine, ip); err != nil {
-				r.Log.Info("failed to unauthorize ip", "error", err)
-				return err
-			}
-		} else {
-			delete(nodesMap, ip)
+	for _, ip := range cluster.Ips {
+		_, exist := nodesMap[ip.IP]
+		if !exist && !strings.HasPrefix(ip.Description, "K8S-CDB-Operator_") {
+			newIPs = append(newIPs, ip)
 		}
 	}
 
-	for nodeAddress, node := range nodesMap {
-		description := fmt.Sprintf("K8S-CDB-Operator_%s_%s_%s", node.Name, crd.UID, node.UID)
-		if err := AuthorizeNodeIp(ctx, r, projectId, serviceId, engine, nodeAddress, description); err != nil {
-			r.Log.Info("failed to authorize ip", "error", err)
-			return err
-		}
-	}
-	return nil
+	logger.V(1).Info(fmt.Sprintf("New IPs: %+v", newIPs))
+	return UpdateClusterNodeIps(ctx, r, projectId, serviceId, cluster.Engine, newIPs)
 }
 
 // SetupWithManager sets up the controller with the Manager.
