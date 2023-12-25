@@ -10,8 +10,10 @@ type IpRestriction struct {
 	Description string `json:"description"`
 }
 type Cluster struct {
-	Engine string          `json:"engine"`
-	Ips    []IpRestriction `json:"ipRestrictions"`
+	ID          string          `json:"id"`
+	Engine      string          `json:"engine"`
+	Ips         []IpRestriction `json:"ipRestrictions"`
+	NetworkType string          `json:"networkType"`
 }
 type ClusterUpdate struct {
 	Ips []IpRestriction `json:"ipRestrictions"`

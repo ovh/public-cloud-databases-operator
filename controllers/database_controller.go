@@ -18,7 +18,10 @@ package controllers
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -124,10 +127,23 @@ func (r *DatabaseReconciler) ProcessIpAuthorizationForOneService(ctx context.Con
 
 	newIPs := make([]IpRestriction, 0)
 	nodesMap := make(map[string]struct{})
-	for _, node := range nodes.Items {
-		ip := getInternalAddress(node) + Mask
-		nodesMap[ip] = struct{}{}
-		newIPs = append(newIPs, IpRestriction{IP: ip, Description: fmt.Sprintf("K8S-CDB-Operator_%s_%s_%s", node.Name, crd.UID, node.UID)})
+
+	// if db is private get kube node private ip
+	if cluster.NetworkType == "private" {
+		for _, node := range nodes.Items {
+			ip := getInternalAddress(node) + Mask
+			// check if kube cluster is private
+			if ip == "" {
+				return errors.New(fmt.Sprintf("Kubernetes cluster seem to be public and the managed db %s is private", cluster.ID))
+			}
+			nodesMap[ip] = struct{}{}
+			newIPs = append(newIPs, IpRestriction{IP: ip, Description: fmt.Sprintf("K8S-CDB-Operator_%s_%s_%s", node.Name, crd.UID, node.UID)})
+		}
+	} else {
+		nodesMap, newIPs, err = getKubePublicAddesses(nodes, crd)
+		if err != nil {
+			return err
+		}
 	}
 
 	for _, ip := range cluster.Ips {
@@ -156,4 +172,46 @@ func getInternalAddress(node corev1.Node) string {
 		}
 	}
 	return ""
+}
+
+func getKubePublicAddesses(nodes corev1.NodeList, crd v1alpha1.Database) (map[string]struct{}, []IpRestriction, error) {
+	// build public ip list based on kubernetes nodes
+	newIPs := make([]IpRestriction, 0)
+	nodesMap := make(map[string]struct{})
+
+	for _, node := range nodes.Items {
+		for _, address := range node.Status.Addresses {
+			if address.Type == "ExternalIP" {
+				ip := fmt.Sprintf("%s%s", address.Address, Mask)
+				nodesMap[ip] = struct{}{}
+				newIPs = append(newIPs, IpRestriction{IP: ip, Description: fmt.Sprintf("K8S-CDB-Operator_%s_%s_%s", node.Name, crd.UID, node.UID)})
+			}
+		}
+	}
+
+	// Get the egress ip used from the cluster (the operator is inside the cluster)
+	ifconfigURL := "https://ifconfig.io"
+	res, err := http.Get(ifconfigURL)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	resBody, err := io.ReadAll(res.Body)
+	if err != nil {
+		return nil, nil, err
+	}
+	ip := string(resBody)
+
+	// check if public ip return by ifconfig.io is one of the kubernetes node
+	_, exist := nodesMap[ip]
+	if !exist {
+		// if the ip is not one of the nodes that mean the kubernetes cluster use a gateway
+		// so only return gateway public ip
+		newIPs := make([]IpRestriction, 0)
+		nodesMap := make(map[string]struct{})
+
+		nodesMap[ip] = struct{}{}
+		newIPs = append(newIPs, IpRestriction{IP: ip, Description: fmt.Sprintf("K8S-CDB-Operator_kubeGW_%s_%s", crd.UID, ip)})
+	}
+	return nodesMap, newIPs, nil
 }

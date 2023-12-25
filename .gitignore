@@ -8,6 +8,7 @@
 bin
 testbin/*
 Dockerfile.cross
+public-cloud-databases-operator
 
 # Test binary, build with `go test -c`
 *.test
@@ -24,3 +25,4 @@ Dockerfile.cross
 *.swp
 *.swo
 *~
+.devcontainer
