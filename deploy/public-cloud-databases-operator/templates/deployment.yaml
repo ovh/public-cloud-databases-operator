@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ include "public-cloud-databases-operator.fullname" . }}
-  namespace: {{ .Values.namespace }}
+  namespace: {{ .Release.Namespace }}
   labels:
     app: {{ include "public-cloud-databases-operator.name" . }}
     chart: {{ include "public-cloud-databases-operator.chart" . }}
@@ -49,22 +49,22 @@ spec:
             - name: REGION
               valueFrom:
                 secretKeyRef:
-                  name: ovh-credentials
+                  name: {{ include "ovhcreds.secretName" $ }}
                   key: region
             - name: APPLICATION_KEY
               valueFrom:
                 secretKeyRef:
-                  name: ovh-credentials
+                  name: {{ include "ovhcreds.secretName" $ }}
                   key: applicationKey
             - name: APPLICATION_SECRET
               valueFrom:
                 secretKeyRef:
-                  name: ovh-credentials
+                  name: {{ include "ovhcreds.secretName" $ }}
                   key: applicationSecret
             - name: CONSUMER_KEY
               valueFrom:
                 secretKeyRef:
-                  name: ovh-credentials
+                  name: {{ include "ovhcreds.secretName" $ }}
                   key: consumerKey
       {{- with .Values.nodeSelector }}
       nodeSelector:
