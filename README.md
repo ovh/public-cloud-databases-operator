@@ -13,11 +13,11 @@ This operator is compatible with public and private managed database.
 If the managed database is deployed in `private` mode, `private` IP addresses of the Kubernetes nodes will be trusted.
 The Kubernetes cluster must be deployed in the same network used by managed database.
 
-#### Managed database in public mode and Kubernetes cluster `without`` GW
+#### Managed database in public mode and Kubernetes cluster `without` GW
 
 If the managed database is deployed in `public` mode, `public` IP addresses of the Kubernetes nodes will be trusted.
 
-#### Managed database in public mode and Kubernetes cluster `with`` GW
+#### Managed database in public mode and Kubernetes cluster `with` GW
 
 The OVHcloud managed Kubernetes cluster can be configured to use a GW to reach internet.
 If the managed database is deployed in `public` mode and a GW was configured on the managed Kubernetes, the `public` IP address of the GW will be trusted.
