@@ -23,8 +23,12 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	"github.com/go-logr/logr"
 	"github.com/ovh/go-ovh/ovh"
@@ -145,7 +149,30 @@ func (r *DatabaseReconciler) ProcessIpAuthorizationForOneService(ctx context.Con
 func (r *DatabaseReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.Database{}).
-		Owns(&corev1.Node{}).
+		Watches(&corev1.Node{}, handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, object client.Object) []ctrl.Request {
+			databaseList := &v1alpha1.DatabaseList{}
+			if err := mgr.GetClient().List(ctx, databaseList); err != nil {
+				mgr.GetLogger().Error(err, "failed to list crd")
+				return nil
+			}
+
+			reqs := make([]ctrl.Request, 0, len(databaseList.Items))
+			for _, database := range databaseList.Items {
+				reqs = append(reqs, ctrl.Request{
+					NamespacedName: types.NamespacedName{
+						Namespace: database.GetNamespace(),
+						Name:      database.GetName(),
+					},
+				})
+			}
+
+			return reqs
+		})).
+		WithEventFilter(predicate.Funcs{
+			GenericFunc: func(e event.GenericEvent) bool {
+				return false
+			},
+		}).
 		Complete(r)
 }
 
