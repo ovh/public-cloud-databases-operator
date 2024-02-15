@@ -17,23 +17,28 @@ image:
   tag: latest
   pullPolicy: IfNotPresent
 
-imagePullSecrets:
-  - name: registry
+imagePullSecrets: []
 
 ovhCredentials:
+  ## Name of the secret to create if `useSecret` is true and `existingSecret` is empty. Optional.
+  ##
+  name:
+  ## Name of a pre-existing secret (if any) in the Operator namespace
+  ## that should be used to get API credentials. Optional.
+  ##
+  existingSecret:
+
+  ## This will automatically create the secret with you OVHcloud API creds
+  ##
   applicationKey: ""
   applicationSecret: ""
   consumerKey: ""
-  region: ""
-
+  region: "ovh-eu"
 
 resources: {}
-
-namespace: public-cloud-databases-operator
 
 nodeSelector: {}
 
 tolerations: []
 
 affinity: {}
-

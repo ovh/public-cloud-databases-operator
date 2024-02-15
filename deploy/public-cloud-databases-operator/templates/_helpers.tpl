@@ -30,3 +30,14 @@ Create chart name and version as used by the chart label.
 {{- define "public-cloud-databases-operator.chart" -}}
 {{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
+
+{{/*
+Create the name for the credentials secret.
+*/}}
+{{- define "ovhcreds.secretName" -}}
+{{- if .Values.ovhCredentials.existingSecret -}}
+  {{- .Values.ovhCredentials.existingSecret -}}
+{{- else -}}
+  {{ default (include "public-cloud-databases-operator.fullname" .) .Values.ovhCredentials.name }}
+{{- end -}}
+{{- end -}}
