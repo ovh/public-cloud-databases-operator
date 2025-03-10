@@ -1,0 +1,40 @@
+name: Build
+on: [push]
+
+integrations: [artifactory-pu-data-clouddatabases]
+
+gates:
+  manual:
+    if: ${{ success() && (git.ref_type == 'tag' || gate.approve) }}
+    inputs:
+      approve:
+        type: boolean
+jobs:
+  Docker:
+    runs-on: library/default-vm
+    steps:
+      - uses: actions/checkout
+      - run: docker build -t public-cloud-databases-operator .
+      - uses: actions/dockerPush
+        with:
+          image: "public-cloud-databases-operator"
+          tags: "${{ git.semver_current }}"
+
+  Helm:
+    runs-on: library/default-vm
+    steps:
+      - uses: actions/checkout
+      - uses: actions/helmPush
+        with:
+          chartFolder: ./deploy/public-cloud-databases-operator
+          appVersion: "${{ git.semver_current }}"
+          chartVersion: "${{ git.semver_current }}"
+
+  Release:
+    runs-on: library/default-container
+    needs: [Helm, Docker]
+    gate: manual
+    steps:
+      - uses: actions/artifactoryRelease
+        with:
+          artifacts: "docker:**/* helm:*"
