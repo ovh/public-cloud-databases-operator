@@ -4,11 +4,12 @@
 # More info: https://book.kubebuilder.io/reference/project-config.html
 domain: ovh.net
 layout:
-- go.kubebuilder.io/v3
+- go.kubebuilder.io/v4
 plugins:
+  helm.kubebuilder.io/v1-alpha: {}
   manifests.sdk.operatorframework.io/v2: {}
   scorecard.sdk.operatorframework.io/v2: {}
-projectName: public-cloud-databases-operator-3
+projectName: public-cloud-databases-operator
 repo: github.com/ovh/public-cloud-databases-operator
 resources:
 - api:
