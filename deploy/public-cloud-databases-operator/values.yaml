@@ -14,7 +14,6 @@ fullnameOverride: ""
 
 image:
   repository: ovhcom/public-cloud-databases-operator
-  tag: latest
   pullPolicy: IfNotPresent
 
 imagePullSecrets: []
