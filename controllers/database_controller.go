@@ -212,7 +212,7 @@ func getKubePublicAddesses(nodes corev1.NodeList, crd v1alpha1.Database) ([]IpRe
 	if err != nil {
 		return nil, err
 	}
-	ip := string(resBody)
+	ip := strings.TrimSpace(string(resBody))
 
 	// check if public ip return by ifconfig.io is one of the kubernetes node
 	_, exist := ipsMap[ip]
