@@ -62,7 +62,7 @@ namespace: XXXX #Your Kubernetes namespace
 Use the kubernetes package manager [helm](https://helm.sh) and the values file you created to install the operator.
 
 ```bash
-helm install -f values.yaml public-cloud-databases-operator oci://registry-1.docker.io/ovhcom/public-cloud-databases-operator --version 3
+helm install -f values.yaml public-cloud-databases-operator oci://registry-1.docker.io/ovhcom/public-cloud-databases-operator
 ```
 
 That will create the operator, crd and secrets.
