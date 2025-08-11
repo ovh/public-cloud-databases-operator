@@ -182,7 +182,7 @@ func getKubeInternalAddress(ctx context.Context, nodes corev1.NodeList, crd v1al
 			}
 		}
 	}
-	logger.V(1).Info(fmt.Sprintf("New IPs (External): %+v", newIPs))
+	logger.V(1).Info(fmt.Sprintf("New IPs (Internal): %+v", newIPs))
 	return newIPs, nil
 }
 
