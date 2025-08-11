@@ -117,20 +117,14 @@ func (r *DatabaseReconciler) UpdateServiceIpRestriction(ctx context.Context, crd
 	}
 	logger.V(1).Info(fmt.Sprintf("Old IPs: %+v", cluster.Ips))
 
-	var newIPs []IpRestriction
+	newIPs, err := getKubeInternalAddress(ctx, nodes, crd)
+	if err != nil {
+		return err
+	}
 
-	// if db is private get kube node private ip
-	if cluster.NetworkType == "private" {
-		for _, node := range nodes.Items {
-			ip := getInternalAddress(node) + Mask
-			// check if kube cluster is private
-			if ip == "" {
-				return fmt.Errorf("kubernetes cluster seem to be public and the managed db %s is private", cluster.ID)
-			}
-			newIPs = append(newIPs, IpRestriction{IP: ip, Description: IpRestrictionDescription(node, crd)})
-		}
-	} else {
-		newIPs, err = getKubePublicAddesses(nodes, crd)
+	// if db is public get kube node public ip
+	if cluster.NetworkType == "public" {
+		newIPs, err = getKubePublicAddesses(ctx, nodes, crd, newIPs)
 		if err != nil {
 			return err
 		}
@@ -177,19 +171,30 @@ func (r *DatabaseReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-func getInternalAddress(node corev1.Node) string {
-	for _, address := range node.Status.Addresses {
-		if address.Type == "InternalIP" {
-			return address.Address
+func getKubeInternalAddress(ctx context.Context, nodes corev1.NodeList, crd v1alpha1.Database) ([]IpRestriction, error) {
+	logger := log.FromContext(ctx)
+	newIPs := make([]IpRestriction, 0)
+	for _, node := range nodes.Items {
+		for _, address := range node.Status.Addresses {
+			if address.Type == "InternalIP" {
+				ip := fmt.Sprintf("%s%s", address.Address, Mask)
+				newIPs = append(newIPs, IpRestriction{IP: ip, Description: IpRestrictionDescription(node, crd)})
+			}
 		}
 	}
-	return ""
+	logger.V(1).Info(fmt.Sprintf("New IPs (External): %+v", newIPs))
+	return newIPs, nil
 }
 
-func getKubePublicAddesses(nodes corev1.NodeList, crd v1alpha1.Database) ([]IpRestriction, error) {
+func getKubePublicAddesses(ctx context.Context, nodes corev1.NodeList, crd v1alpha1.Database, newIPs []IpRestriction) ([]IpRestriction, error) {
+	logger := log.FromContext(ctx)
+
 	// build public ip list based on kubernetes nodes
-	newIPs := make([]IpRestriction, 0)
 	ipsMap := make(map[string]struct{})
+
+	for _, ip := range newIPs {
+		ipsMap[ip.IP] = struct{}{}
+	}
 
 	for _, node := range nodes.Items {
 		for _, address := range node.Status.Addresses {
@@ -200,6 +205,7 @@ func getKubePublicAddesses(nodes corev1.NodeList, crd v1alpha1.Database) ([]IpRe
 			}
 		}
 	}
+	logger.V(1).Info(fmt.Sprintf("New IPs (External): %+v", newIPs))
 
 	// Get the egress ip used from the cluster (the operator is inside the cluster)
 	ifconfigURL := "https://ifconfig.io"
@@ -213,14 +219,20 @@ func getKubePublicAddesses(nodes corev1.NodeList, crd v1alpha1.Database) ([]IpRe
 		return nil, err
 	}
 	ip := strings.TrimSpace(string(resBody))
+	ipMask := fmt.Sprintf("%s%s", ip, Mask)
+	logger.V(1).Info(fmt.Sprintf("Ifconfig IPs: %s", ipMask))
 
 	// check if public ip return by ifconfig.io is one of the kubernetes node
-	_, exist := ipsMap[ip]
+	_, exist := ipsMap[ipMask]
 	if !exist {
 		// if the ip is not one of the nodes that mean the kubernetes cluster use a gateway
 		// so only return gateway public ip
-		ipsMap[ip] = struct{}{}
-		newIPs = []IpRestriction{{IP: fmt.Sprintf("%s%s", ip, Mask), Description: fmt.Sprintf("%s_kubeGW_%s", ipRestrictionPrefix, crd.UID)}}
+		newIPs = []IpRestriction{
+			{
+				IP:          ipMask,
+				Description: fmt.Sprintf("%s_kubeGW_%s", ipRestrictionPrefix, crd.UID),
+			},
+		}
 	}
 	return newIPs, nil
 }
