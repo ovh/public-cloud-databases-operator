@@ -4,6 +4,15 @@ metadata:
     name: {{ include "public-cloud-databases-operator.resourceName" (dict "suffix" "manager-role" "context" $) }}
 rules:
     - apiGroups:
+        - ""
+      resources:
+        - events
+        - nodes
+      verbs:
+        - get
+        - list
+        - watch
+    - apiGroups:
         - cloud.ovh.net
       resources:
         - databases
