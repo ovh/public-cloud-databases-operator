@@ -4,7 +4,7 @@ description: OVHcloud databases operator
 type: application
 
 version: 0.1.8
-appVersion: "1.0.7"
+appVersion: "v1.0.7"
 
 keywords:
   - kubernetes

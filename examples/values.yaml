@@ -1,12 +1,16 @@
+# -- Operator container image
 image:
   repository: ovhcom/public-cloud-databases-operator
-  tag: latest
+  # tag defaults to Chart.AppVersion if not set
+  tag: ""
   pullPolicy: IfNotPresent
 
+# -- OVHcloud API credentials
 ovhCredentials:
+  # Use an existing Secret instead of creating one:
+  # existingSecret: "my-ovh-secret"
+
+  region: ovh-eu
   applicationKey: XXXX
   applicationSecret: XXXX
   consumerKey: XXXX
-  region: XXXX
-
-namespace: XXXX #Your Kubernetes namespace
