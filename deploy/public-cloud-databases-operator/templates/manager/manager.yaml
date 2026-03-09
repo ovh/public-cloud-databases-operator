@@ -1,0 +1,125 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+    labels:
+        app.kubernetes.io/component: manager
+        app.kubernetes.io/created-by: public-cloud-databases-operator
+        app.kubernetes.io/instance: controller-manager
+        app.kubernetes.io/managed-by: {{ .Release.Service }}
+        app.kubernetes.io/name: deployment
+        helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
+        app.kubernetes.io/part-of: public-cloud-databases-operator
+        control-plane: controller-manager
+    name: {{ include "public-cloud-databases-operator.resourceName" (dict "suffix" "controller-manager" "context" $) }}
+    namespace: {{ .Release.Namespace }}
+spec:
+    replicas: {{ .Values.replicas }}
+    selector:
+        matchLabels:
+            control-plane: controller-manager
+    template:
+        metadata:
+            annotations:
+                kubectl.kubernetes.io/default-container: manager
+            labels:
+                control-plane: controller-manager
+        spec:
+            {{- with .Values.tolerations }}
+            tolerations: {{ toYaml . | nindent 16 }}
+            {{- end }}
+            {{- with .Values.nodeSelector }}
+            nodeSelector: {{ toYaml . | nindent 16 }}
+            {{- end }}
+            {{- with .Values.affinity }}
+            affinity: {{ toYaml . | nindent 16 }}
+            {{- end }}
+            containers:
+                - args:
+                    {{- range .Values.kubeRbacProxy.args }}
+                    - {{ . }}
+                    {{- end }}
+                  image: "{{ .Values.kubeRbacProxy.image.repository }}:{{ .Values.kubeRbacProxy.image.tag }}"
+                  imagePullPolicy: {{ .Values.kubeRbacProxy.image.pullPolicy }}
+                  name: kube-rbac-proxy
+                  ports:
+                    - containerPort: 8443
+                      name: https
+                      protocol: TCP
+                  resources:
+                    {{- if .Values.kubeRbacProxy.resources }}
+                    {{- toYaml .Values.kubeRbacProxy.resources | nindent 20 }}
+                    {{- else }}
+                    {}
+                    {{- end }}
+                  securityContext:
+                    {{- if .Values.kubeRbacProxy.securityContext }}
+                    {{- toYaml .Values.kubeRbacProxy.securityContext | nindent 20 }}
+                    {{- else }}
+                    {}
+                    {{- end }}
+                - args:
+                    - --health-probe-bind-address=:8081
+                    - --metrics-bind-address=127.0.0.1:8080
+                    - --leader-elect
+                  command:
+                    - /manager
+                  image: "{{ .Values.image.repository }}:{{ default .Chart.AppVersion .Values.image.tag }}"
+                  imagePullPolicy: {{ .Values.image.pullPolicy }}
+                  livenessProbe:
+                    httpGet:
+                        path: /healthz
+                        port: 8081
+                    initialDelaySeconds: 15
+                    periodSeconds: 20
+                  name: manager
+                  readinessProbe:
+                    httpGet:
+                        path: /readyz
+                        port: 8081
+                    initialDelaySeconds: 5
+                    periodSeconds: 10
+                  resources:
+                    limits:
+                        cpu: 500m
+                        memory: 128Mi
+                    requests:
+                        cpu: 10m
+                        memory: 64Mi
+                  env:
+                    - name: REGION
+                      valueFrom:
+                        secretKeyRef:
+                          name: {{ include "ovhcreds.secretName" $ }}
+                          key: region
+                    - name: APPLICATION_KEY
+                      valueFrom:
+                        secretKeyRef:
+                          name: {{ include "ovhcreds.secretName" $ }}
+                          key: applicationKey
+                    - name: APPLICATION_SECRET
+                      valueFrom:
+                        secretKeyRef:
+                          name: {{ include "ovhcreds.secretName" $ }}
+                          key: applicationSecret
+                    - name: CONSUMER_KEY
+                      valueFrom:
+                        secretKeyRef:
+                          name: {{ include "ovhcreds.secretName" $ }}
+                          key: consumerKey
+                  securityContext:
+                    allowPrivilegeEscalation: false
+                    capabilities:
+                        drop:
+                            - ALL
+            {{- with .Values.imagePullSecrets }}
+            imagePullSecrets:
+              {{- toYaml . | nindent 14 }}
+            {{- end }}
+            securityContext:
+              {{- if .Values.podSecurityContext }}
+              {{- toYaml .Values.podSecurityContext | nindent 14 }}
+              {{- else }}
+              {}
+              {{- end }}
+            serviceAccountName: {{ include "public-cloud-databases-operator.resourceName" (dict "suffix" "controller-manager" "context" $) }}
+            terminationGracePeriodSeconds: 10
