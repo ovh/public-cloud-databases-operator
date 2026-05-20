@@ -133,7 +133,7 @@ func (r *DatabaseReconciler) UpdateServiceIpRestriction(ctx context.Context, crd
 	}
 
 	for _, ip := range cluster.Ips {
-		if !strings.HasPrefix(ip.Description, ipRestrictionPrefix) {
+		if !strings.HasPrefix(ip.Description, ipRestrictionPrefix) || !strings.Contains(ip.Description, string(crd.UID)) {
 			newIPs = append(newIPs, ip)
 		}
 	}
