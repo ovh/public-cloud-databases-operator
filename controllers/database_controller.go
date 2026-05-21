@@ -28,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -36,6 +37,8 @@ import (
 	"github.com/ovh/go-ovh/ovh"
 	"github.com/ovh/public-cloud-databases-operator/api/v1alpha1"
 )
+
+const finalizerName = "databases.cloud.ovh.net/ip-cleanup"
 
 // DatabaseReconciler reconciles a Database object
 type DatabaseReconciler struct {
@@ -59,16 +62,40 @@ func (r *DatabaseReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	logger := ctrl.Log.WithName("controllers").WithName("Service").WithValues("req", req)
 	logger.V(1).Info("reconcile")
 
-	//v1alpha1.SchemeBuilder.
 	serviceList := &v1alpha1.DatabaseList{}
 	err := r.List(ctx, serviceList)
 	if err != nil {
 		logger.Error(err, "failed to list crd")
 		return ctrl.Result{}, err
 	}
-	for _, crd := range serviceList.Items {
+	for i := range serviceList.Items {
+		crd := &serviceList.Items[i]
 		logger.V(1).Info(fmt.Sprintf("spec: %v", crd.Spec))
 		logger := logger.WithValues("project_id", crd.Spec.ProjectId)
+
+		// Handle deletion: remove our IPs from OVH then release the finalizer
+		if !crd.DeletionTimestamp.IsZero() {
+			if controllerutil.ContainsFinalizer(crd, finalizerName) {
+				if err := r.cleanupIpRestrictions(ctx, crd); err != nil {
+					logger.Error(err, "failed to cleanup ip restrictions on deletion")
+					return ctrl.Result{}, err
+				}
+				controllerutil.RemoveFinalizer(crd, finalizerName)
+				if err := r.Update(ctx, crd); err != nil {
+					return ctrl.Result{}, err
+				}
+			}
+			continue
+		}
+
+		// Ensure finalizer is registered
+		if !controllerutil.ContainsFinalizer(crd, finalizerName) {
+			controllerutil.AddFinalizer(crd, finalizerName)
+			if err := r.Update(ctx, crd); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+
 		opts := []client.ListOption{}
 		if crd.Spec.LabelSelector != nil {
 			logger.V(1).Info(fmt.Sprintf("match labels: %v", crd.Spec.LabelSelector.MatchLabels))
@@ -87,7 +114,6 @@ func (r *DatabaseReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		logger.Info(fmt.Sprintf("nodes count: %d", len(nodes.Items)))
 
 		var servicesIds []string
-		// check if there is a wildcard on service id, then process on all the services of the project
 		if crd.Spec.ServiceId == "" {
 			servicesIds, err = GetServicesForProjectId(ctx, r, crd.Spec.ProjectId)
 			if err != nil {
@@ -100,7 +126,7 @@ func (r *DatabaseReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		for _, serviceId := range servicesIds {
 			logger := logger.WithValues("service_id", serviceId)
 			logger.V(1).Info("processing")
-			if err := r.UpdateServiceIpRestriction(log.IntoContext(ctx, logger), crd, nodes, crd.Spec.ProjectId, serviceId); err != nil {
+			if err := r.UpdateServiceIpRestriction(log.IntoContext(ctx, logger), *crd, nodes, crd.Spec.ProjectId, serviceId); err != nil {
 				logger.Error(err, "failed to process ip restriction")
 				return ctrl.Result{}, err
 			}
@@ -109,6 +135,41 @@ func (r *DatabaseReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	}
 
 	return ctrl.Result{}, nil
+}
+
+func (r *DatabaseReconciler) cleanupIpRestrictions(ctx context.Context, crd *v1alpha1.Database) error {
+	logger := log.FromContext(ctx)
+
+	var serviceIds []string
+	if crd.Spec.ServiceId == "" {
+		var err error
+		serviceIds, err = GetServicesForProjectId(ctx, r, crd.Spec.ProjectId)
+		if err != nil {
+			return err
+		}
+	} else {
+		serviceIds = []string{crd.Spec.ServiceId}
+	}
+
+	for _, serviceId := range serviceIds {
+		cluster, err := GetCluster(ctx, r, crd.Spec.ProjectId, serviceId)
+		if err != nil {
+			return err
+		}
+
+		remaining := make([]IpRestriction, 0)
+		for _, ip := range cluster.Ips {
+			if !strings.HasPrefix(ip.Description, ipRestrictionPrefix) || !strings.Contains(ip.Description, string(crd.UID)) {
+				remaining = append(remaining, ip)
+			}
+		}
+
+		logger.Info(fmt.Sprintf("cleanup: removing IPs for CRD %s, %d IPs remaining", crd.UID, len(remaining)))
+		if err := UpdateClusterNodeIps(ctx, r, crd.Spec.ProjectId, serviceId, cluster.Engine, remaining); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (r *DatabaseReconciler) UpdateServiceIpRestriction(ctx context.Context, crd v1alpha1.Database, nodes corev1.NodeList, projectId string, serviceId string) error {
