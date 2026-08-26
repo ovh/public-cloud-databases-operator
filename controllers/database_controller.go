@@ -21,7 +21,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/netip"
 	"strings"
+	"unicode"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -159,7 +161,7 @@ func (r *DatabaseReconciler) cleanupIpRestrictions(ctx context.Context, crd *v1a
 
 		remaining := make([]IpRestriction, 0)
 		for _, ip := range cluster.Ips {
-			if !strings.HasPrefix(ip.Description, ipRestrictionPrefix) || !strings.Contains(ip.Description, string(crd.UID)) {
+			if !isOwnedDescription(ip.Description, *crd) {
 				remaining = append(remaining, ip)
 			}
 		}
@@ -193,8 +195,12 @@ func (r *DatabaseReconciler) UpdateServiceIpRestriction(ctx context.Context, crd
 		}
 	}
 
+	// IPs declared on the CR are authorized on top of the ones discovered from the nodes.
+	// This has to run after getKubePublicAddesses, which may reset the list to the sole GW IP.
+	newIPs = getAnnotationAddresses(ctx, crd, newIPs)
+
 	for _, ip := range cluster.Ips {
-		if !strings.HasPrefix(ip.Description, ipRestrictionPrefix) || !strings.Contains(ip.Description, string(crd.UID)) {
+		if !isOwnedDescription(ip.Description, crd) {
 			newIPs = append(newIPs, ip)
 		}
 	}
@@ -300,8 +306,83 @@ func getKubePublicAddesses(ctx context.Context, nodes corev1.NodeList, crd v1alp
 	return newIPs, nil
 }
 
+// getAnnotationAddresses returns newIPs extended with the IPs declared through the
+// additionalIpsAnnotation. It authorizes hosts the operator cannot discover from the
+// Kubernetes API, such as a bastion, a CI runner or a VPN endpoint.
+//
+// Entries are separated by commas or whitespace and are either a bare IP or a CIDR
+// block. An unparseable entry is logged and skipped rather than failing the
+// reconciliation: a typo on one CR must not stop the others from being processed.
+func getAnnotationAddresses(ctx context.Context, crd v1alpha1.Database, newIPs []IpRestriction) []IpRestriction {
+	logger := log.FromContext(ctx)
+
+	value, exist := crd.Annotations[additionalIpsAnnotation]
+	if !exist {
+		return newIPs
+	}
+
+	// the same IP must not appear twice in the ipRestrictions payload
+	ipsMap := make(map[string]struct{})
+	for _, ip := range newIPs {
+		ipsMap[ip.IP] = struct{}{}
+	}
+
+	annotationIPs := make([]IpRestriction, 0)
+	for _, entry := range strings.FieldsFunc(value, func(r rune) bool {
+		return r == ',' || unicode.IsSpace(r)
+	}) {
+		ip, err := parseIpBlock(entry)
+		if err != nil {
+			logger.Error(err, fmt.Sprintf("ignoring entry of annotation %s", additionalIpsAnnotation))
+			continue
+		}
+
+		if _, exist := ipsMap[ip]; exist {
+			continue
+		}
+		ipsMap[ip] = struct{}{}
+
+		annotationIPs = append(annotationIPs, IpRestriction{IP: ip, Description: AnnotationIpRestrictionDescription(crd)})
+	}
+
+	logger.V(1).Info(fmt.Sprintf("New IPs (Annotation): %+v", annotationIPs))
+	return append(newIPs, annotationIPs...)
+}
+
+// parseIpBlock normalizes a bare IP or a CIDR block into the ipBlock form expected
+// by the OVHcloud API. A bare IP is turned into a single host block.
+func parseIpBlock(entry string) (string, error) {
+	if strings.Contains(entry, "/") {
+		prefix, err := netip.ParsePrefix(entry)
+		if err != nil {
+			return "", fmt.Errorf("invalid CIDR block %q: %w", entry, err)
+		}
+		return prefix.Masked().String(), nil
+	}
+
+	addr, err := netip.ParseAddr(entry)
+	if err != nil {
+		return "", fmt.Errorf("invalid IP address %q: %w", entry, err)
+	}
+	return netip.PrefixFrom(addr, addr.BitLen()).String(), nil
+}
+
 const ipRestrictionPrefix = "K8S-CDB-Operator"
+
+// additionalIpsAnnotation lists IPs to authorize besides the ones of the selected nodes
+const additionalIpsAnnotation = "databases.cloud.ovh.net/additional-ips"
 
 func IpRestrictionDescription(node corev1.Node, crd v1alpha1.Database) string {
 	return fmt.Sprintf("%s_%s_%s_%s", ipRestrictionPrefix, node.Name, crd.UID, node.UID)
+}
+
+// isOwnedDescription reports whether an existing ip restriction was created by this
+// operator for this very CRD, and may therefore be refreshed or removed by it.
+// Entries belonging to another CRD, another cluster or to the user are left alone.
+func isOwnedDescription(description string, crd v1alpha1.Database) bool {
+	return strings.HasPrefix(description, ipRestrictionPrefix) && strings.Contains(description, string(crd.UID))
+}
+
+func AnnotationIpRestrictionDescription(crd v1alpha1.Database) string {
+	return fmt.Sprintf("%s_annotation_%s", ipRestrictionPrefix, crd.UID)
 }

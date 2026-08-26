@@ -115,6 +115,44 @@ The created CR and the node must have the same label and value.
 kubectl label nodes NODENAME1 NODENAME2 ... LABELNAME=LABELVALUE
 ```
 
+## Additional IP addresses
+
+Some hosts have to reach the managed database without being a node of the Kubernetes cluster,
+for instance a bastion, a CI runner or a VPN endpoint. Those IP addresses cannot be discovered
+from the Kubernetes API, so they can be declared on the CR with the
+`databases.cloud.ovh.net/additional-ips` annotation.
+
+```yaml
+apiVersion: cloud.ovh.net/v1alpha1
+kind: Database
+metadata:
+  name: XXXX
+  namespace: XXXX
+  annotations:
+    databases.cloud.ovh.net/additional-ips: "203.0.113.5, 198.51.100.0/24"
+spec:
+  projectId: XXXX
+```
+
+They are authorized in addition to the IP addresses of the selected nodes. Entries are
+separated by commas or whitespace, which also allows the multi line form:
+
+```yaml
+  annotations:
+    databases.cloud.ovh.net/additional-ips: |
+      203.0.113.5
+      198.51.100.0/24
+```
+
+An entry is either a bare IP address, authorized as a single host (`/32` for IPv4, `/128`
+for IPv6), or a CIDR block, authorized as a whole. A block is normalized to its network
+address, so `192.0.2.10/24` is authorized as `192.0.2.0/24`.
+
+These IP addresses are owned by the operator exactly like the node ones: they are removed
+from the service when the annotation entry is removed or when the CR is deleted. An entry
+that cannot be parsed is reported in the operator logs and ignored, the other entries and
+the other CRs are still processed.
+
 ## Related links
 
 - Contribute: <https://github.com/ovh/public-cloud-databases-operator/blob/master/CONTRIBUTING.md>
