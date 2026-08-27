@@ -233,7 +233,7 @@ HELM_NAMESPACE ?= public-cloud-databases-operator-system
 ## Name of the Helm release
 HELM_RELEASE ?= public-cloud-databases-operator
 ## Path to the Helm chart directory
-HELM_CHART_DIR ?= deploy/chart
+HELM_CHART_DIR ?= deploy/public-cloud-databases-operator
 ## Additional arguments to pass to helm commands
 HELM_EXTRA_ARGS ?=
 
@@ -249,8 +249,8 @@ helm-deploy: install-helm ## Deploy manager to the K8s cluster via Helm. Specify
 	$(HELM) upgrade --install $(HELM_RELEASE) $(HELM_CHART_DIR) \
 		--namespace $(HELM_NAMESPACE) \
 		--create-namespace \
-		--set manager.image.repository=$${IMG%:*} \
-		--set manager.image.tag=$${IMG##*:} \
+		--set image.repository=$${IMG%:*} \
+		--set image.tag=$${IMG##*:} \
 		--wait \
 		--timeout 5m \
 		$(HELM_EXTRA_ARGS)
