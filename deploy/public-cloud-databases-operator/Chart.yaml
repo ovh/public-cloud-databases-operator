@@ -3,7 +3,7 @@ name: public-cloud-databases-operator
 description: OVHcloud databases operator
 type: application
 
-version: 0.1.9
+version: 0.1.10
 appVersion: "v1.0.8"
 
 keywords:

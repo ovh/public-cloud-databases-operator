@@ -37,8 +37,10 @@ ovhCredentials:
 # Provides RBAC-based authentication for the metrics endpoint.
 kubeRbacProxy:
   image:
-    repository: gcr.io/kubebuilder/kube-rbac-proxy
-    tag: v0.13.1
+    # gcr.io/kubebuilder was shut down in 2025; quay.io/brancz is the
+    # upstream-maintained home of kube-rbac-proxy.
+    repository: quay.io/brancz/kube-rbac-proxy
+    tag: v0.22.1
     pullPolicy: IfNotPresent
   # -- Arguments passed to the kube-rbac-proxy container
   args:
