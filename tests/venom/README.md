@@ -8,7 +8,7 @@ Integration tests for the operator and its Helm chart, written for
 | Suite | Needs | What it covers |
 | ----- | ----- | -------------- |
 | `01-helm-chart.yml` | `helm` only | Chart lints, templates from the tree **and from the packaged .tgz** (regression for [#31](https://github.com/ovh/public-cloud-databases-operator/issues/31)), credentials wiring, `existingSecret` behavior |
-| `02-operator-e2e.yml` | kubectl context, OVH credentials, a dedicated test database service | Chart install, node/gateway IP authorization on the service, preservation of foreign IP restrictions (multicluster guarantee), cleanup on CR deletion |
+| `02-operator-e2e.yml` | `helm`, `kubectl`, OVH credentials | **Self-provisioning end-to-end**: creates a managed Kubernetes cluster and a PostgreSQL service in the project, installs the chart, verifies ip opening (cluster IPs authorized on the service), preservation of foreign IP restrictions (multicluster guarantee) and cleanup on CR deletion, then deletes everything it created |
 
 ## Running
 
@@ -20,14 +20,25 @@ make venom-test-chart
 
 End-to-end suite:
 
-1. Point `kubectl` at a disposable cluster.
-2. `cp variables.yaml.example variables.yaml` and fill in the OVH
-   credentials and the target `projectId`/`serviceId`/`engine`.
-   **The suite rewrites and finally wipes the service's IP
-   restrictions** — use a service dedicated to testing.
-3. ```sh
+1. `cp variables.yaml.example variables.yaml` and fill in an OVH API
+   token allowed to create/manage/delete managed Kubernetes clusters
+   **and** database services in the project, plus the `projectId`.
+2. ```sh
    make venom-test-e2e
    ```
 
-The e2e suite installs the chart into its own namespace (`pcdb-venom`)
-and removes everything it created on success.
+Mind the cost and duration: the suite provisions a real managed
+Kubernetes cluster (1 node) and a PostgreSQL essential service, both
+billed for the run's ~30-45 minutes, and deletes them in its final
+`teardown` testcase. If the run aborts before teardown, delete the
+resources named `pcdb-venom-<suffix>` from the project by hand (the
+default suffix is `local`; CI uses the CDS run number).
+
+## CI
+
+`.cds/workflows/build.yml` runs `make test` + the chart suite on every
+push (`Test` job), and the full e2e suite on tags (`E2E` job). The
+`Release` job needs all of them, so a release cannot ship without the
+e2e suite passing. Credentials come from the `pcdb-e2e` CDS variable
+set (`ovh_application_key`, `ovh_application_secret`,
+`ovh_consumer_key`, `project_id`).

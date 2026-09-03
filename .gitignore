@@ -32,3 +32,4 @@ Dockerfile.cross
 tests/venom/variables.yaml
 tests/venom/venom*.log
 tests/venom/test_results*
+tests/venom/*.kubeconfig

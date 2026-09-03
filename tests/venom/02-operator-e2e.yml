@@ -1,15 +1,20 @@
 name: Operator end-to-end
 description: |
-  Deploys the operator with the Helm chart onto the current kubectl context,
-  then exercises its features against a real OVHcloud managed database:
-    - node/gateway IPs of the cluster are authorized on the service
-    - IP restrictions owned by someone else (another cluster, the console)
-      are preserved by reconciliation and by cleanup
-    - deleting the Database CR removes the operator-owned entries only
-  Requirements: a reachable Kubernetes cluster (current kubectl context),
-  and a variables file providing OVH credentials and a target service —
-  see variables.yaml.example. The target database service must be
-  dedicated to the test: its IP restrictions are wiped at the end.
+  Fully self-provisioning end-to-end suite. It creates its own OVHcloud
+  managed Kubernetes cluster and its own PostgreSQL managed database in the
+  given project, installs the operator with the Helm chart, verifies the IP
+  restriction features against the real OVHcloud API, then deletes
+  everything it created.
+    - the cluster IPs get authorized on the service (ip opening)
+    - restrictions owned by someone else are preserved by reconciliation
+      and by cleanup (multicluster guarantee)
+    - deleting the Database CR removes only operator-owned entries
+  Requirements: a variables file with OVH credentials allowed to
+  create/manage/delete managed Kubernetes clusters AND database services in
+  the project — see variables.yaml.example. Runtime is ~30-45 minutes and
+  the created resources are billed until the teardown testcase deletes
+  them. If the suite aborts mid-run, delete the resources named
+  pcdb-venom-<suffix> by hand.
 
 vars:
   helmBin: helm
@@ -17,26 +22,92 @@ vars:
   namespace: pcdb-venom
   release: pcdb-venom
   crName: venom-db
+  suffix: local
+  kubeRegion: GRA9
+  nodeFlavor: b3-8
+  dbRegion: GRA
+  dbVersion: "17"
+  dbFlavor: db1-4
   foreignIp: 192.0.2.200/32
   foreignDescription: venom-foreign-entry
+  kubeconfigFile: ./pcdb-venom.kubeconfig
 
 testcases:
-  - name: preflight
+  - name: provisionKube
     steps:
-      - script: kubectl cluster-info
+      - type: ovhapi
+        method: POST
+        path: /cloud/project/{{.projectId}}/kube
+        body: >
+          {"name":"pcdb-venom-{{.suffix}}","region":"{{.kubeRegion}}",
+           "nodepool":{"name":"pcdb-venom-{{.suffix}}","flavorName":"{{.nodeFlavor}}","desiredNodes":1}}
+        assertions:
+          - result.statuscode ShouldEqual 200
+        vars:
+          kubeId:
+            from: result.bodyjson.id
+      - type: ovhapi
+        method: GET
+        path: /cloud/project/{{.projectId}}/kube/{{.kubeId}}
+        retry: 80
+        delay: 15
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.status ShouldEqual READY
+      - type: ovhapi
+        method: POST
+        path: /cloud/project/{{.projectId}}/kube/{{.kubeId}}/kubeconfig
+        assertions:
+          - result.statuscode ShouldEqual 200
+        vars:
+          # raw single-line JSON response: venom variable interpolation
+          # collapses newlines, so the multiline content field must be
+          # decoded in the shell step below, not extracted directly
+          kubeconfigRaw:
+            from: result.body
+      - script: |
+          cat > {{.kubeconfigFile}}.json <<'PCDBEOF'
+          {{.kubeconfigRaw}}
+          PCDBEOF
+          jq -r .content {{.kubeconfigFile}}.json > {{.kubeconfigFile}}
+          rm -f {{.kubeconfigFile}}.json
+          chmod 600 {{.kubeconfigFile}}
+          kubectl --kubeconfig {{.kubeconfigFile}} config current-context
         assertions:
           - result.code ShouldEqual 0
+      - script: KUBECONFIG={{.kubeconfigFile}} kubectl wait --for=condition=Ready nodes --all --timeout=30s
+        retry: 60
+        delay: 15
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: provisionDatabase
+    steps:
+      - type: ovhapi
+        method: POST
+        path: /cloud/project/{{.projectId}}/database/postgresql
+        body: >
+          {"description":"pcdb-venom-{{.suffix}}","plan":"essential","version":"{{.dbVersion}}",
+           "nodesPattern":{"flavor":"{{.dbFlavor}}","number":1,"region":"{{.dbRegion}}"}}
+        assertions:
+          - result.statuscode ShouldEqual 200
+        vars:
+          serviceId:
+            from: result.bodyjson.id
       - type: ovhapi
         method: GET
         path: /cloud/project/{{.projectId}}/database/service/{{.serviceId}}
+        retry: 100
+        delay: 15
         assertions:
           - result.statuscode ShouldEqual 200
           - result.bodyjson.status ShouldEqual READY
 
-  - name: install operator with the chart
+  - name: install-operator
     steps:
       - script: >
           {{.helmBin}} upgrade --install {{.release}} {{.chartDir}}
+          --kubeconfig {{.kubeconfigFile}}
           --namespace {{.namespace}} --create-namespace
           --set ovhCredentials.region={{.ovh.endpoint}}
           --set ovhCredentials.applicationKey={{.ovh.applicationKey}}
@@ -45,26 +116,23 @@ testcases:
           --wait --timeout 5m
         assertions:
           - result.code ShouldEqual 0
-      - script: kubectl rollout status -n {{.namespace}} deployment -l app.kubernetes.io/part-of=public-cloud-databases-operator --timeout=120s
-        assertions:
-          - result.code ShouldEqual 0
 
-  - name: seed a foreign ip restriction
+  - name: seed-foreign-restriction
     steps:
       # Simulates an entry owned by someone else (console user, another
       # cluster's operator). The operator must never touch it.
       - type: ovhapi
         method: PUT
-        path: /cloud/project/{{.projectId}}/database/{{.engine}}/{{.serviceId}}
+        path: /cloud/project/{{.projectId}}/database/postgresql/{{.provisionDatabase.serviceId}}
         body: >
           {"ipRestrictions":[{"ip":"{{.foreignIp}}","description":"{{.foreignDescription}}"}]}
         assertions:
           - result.statuscode ShouldEqual 200
 
-  - name: database CR authorizes the cluster on the service
+  - name: cr-authorizes-cluster
     steps:
       - script: |
-          kubectl apply -f - <<EOF
+          KUBECONFIG={{.kubeconfigFile}} kubectl apply -f - <<EOF
           apiVersion: cloud.ovh.net/v1alpha1
           kind: Database
           metadata:
@@ -72,13 +140,13 @@ testcases:
             namespace: {{.namespace}}
           spec:
             projectId: {{.projectId}}
-            serviceId: {{.serviceId}}
+            serviceId: {{.provisionDatabase.serviceId}}
           EOF
         assertions:
           - result.code ShouldEqual 0
       - type: ovhapi
         method: GET
-        path: /cloud/project/{{.projectId}}/database/service/{{.serviceId}}
+        path: /cloud/project/{{.projectId}}/database/service/{{.provisionDatabase.serviceId}}
         retry: 36
         delay: 5
         assertions:
@@ -88,14 +156,14 @@ testcases:
           # and preserved the foreign entry (multicluster guarantee)
           - result.body ShouldContainSubstring {{.foreignDescription}}
 
-  - name: deleting the CR cleans up only operator-owned entries
+  - name: cleanup-on-delete
     steps:
-      - script: kubectl delete database {{.crName}} -n {{.namespace}} --wait=true
+      - script: KUBECONFIG={{.kubeconfigFile}} kubectl delete database {{.crName}} -n {{.namespace}} --wait=true
         assertions:
           - result.code ShouldEqual 0
       - type: ovhapi
         method: GET
-        path: /cloud/project/{{.projectId}}/database/service/{{.serviceId}}
+        path: /cloud/project/{{.projectId}}/database/service/{{.provisionDatabase.serviceId}}
         retry: 36
         delay: 5
         assertions:
@@ -106,14 +174,15 @@ testcases:
   - name: teardown
     steps:
       - type: ovhapi
-        method: PUT
-        path: /cloud/project/{{.projectId}}/database/{{.engine}}/{{.serviceId}}
-        body: '{"ipRestrictions":[]}'
+        method: DELETE
+        path: /cloud/project/{{.projectId}}/database/postgresql/{{.provisionDatabase.serviceId}}
         assertions:
           - result.statuscode ShouldEqual 200
-      - script: '{{.helmBin}} uninstall {{.release}} --namespace {{.namespace}}'
+      - type: ovhapi
+        method: DELETE
+        path: /cloud/project/{{.projectId}}/kube/{{.provisionKube.kubeId}}
         assertions:
-          - result.code ShouldEqual 0
-      - script: kubectl delete namespace {{.namespace}} --wait=false
+          - result.statuscode ShouldEqual 200
+      - script: rm -f {{.kubeconfigFile}}
         assertions:
           - result.code ShouldEqual 0
