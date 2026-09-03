@@ -1,0 +1,21 @@
+# Copy to variables.yaml (gitignored) and fill in.
+# The OVH API token needs GET on /cloud/project/<projectId>/database/*
+# and PUT on /cloud/project/<projectId>/database/* — create one at
+# https://www.ovh.com/auth/api/createToken
+
+ovh:
+  endpoint: ovh-eu
+  applicationKey: "xxxxxxxxxxxxxxxx"
+  applicationSecret: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  consumerKey: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+# The managed database service used as test target.
+# WARNING: the e2e suite rewrites and finally WIPES the ipRestrictions of
+# this service — use a service dedicated to testing.
+projectId: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+serviceId: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+engine: mongodb
+
+# Optional overrides
+# helmBin: helm
+# namespace: pcdb-venom

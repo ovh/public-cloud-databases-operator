@@ -1,0 +1,63 @@
+name: Helm chart rendering
+description: |
+  Validates that the Helm chart lints, templates and — critically — still
+  templates once packaged as a .tgz. The packaged-artifact check is the
+  regression test for issue #31, where the published 0.1.8/0.1.9 charts
+  failed `helm template` with a missing named template.
+
+vars:
+  helmBin: helm
+  chartDir: ../../deploy/public-cloud-databases-operator
+
+testcases:
+  - name: chart lints
+    steps:
+      - script: '{{.helmBin}} lint {{.chartDir}}'
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: chart templates from the source tree
+    steps:
+      - script: '{{.helmBin}} template venom {{.chartDir}}'
+        assertions:
+          - result.code ShouldEqual 0
+          - 'result.systemout ShouldContainSubstring "kind: Deployment"'
+          - 'result.systemout ShouldContainSubstring "kind: CustomResourceDefinition"'
+          - 'result.systemout ShouldContainSubstring "kind: Secret"'
+          - 'result.systemout ShouldContainSubstring "kind: ServiceAccount"'
+
+  - name: packaged chart templates (issue 31 regression)
+    steps:
+      - script: |
+          set -e
+          tmp=$(mktemp -d)
+          trap "rm -rf $tmp" EXIT
+          {{.helmBin}} package {{.chartDir}} -d $tmp
+          {{.helmBin}} template venom $tmp/public-cloud-databases-operator-*.tgz
+        assertions:
+          - result.code ShouldEqual 0
+          - 'result.systemout ShouldContainSubstring "kind: Deployment"'
+
+  - name: credentials land in the Secret
+    steps:
+      - script: >
+          {{.helmBin}} template venom {{.chartDir}}
+          --set ovhCredentials.region=ovh-eu
+          --set ovhCredentials.applicationKey=ak
+          --set ovhCredentials.applicationSecret=as
+          --set ovhCredentials.consumerKey=ck
+          --show-only templates/secret.yaml
+        assertions:
+          - result.code ShouldEqual 0
+          # b64enc of ovh-eu / ak / as / ck
+          - 'result.systemout ShouldContainSubstring "region: b3ZoLWV1"'
+          - 'result.systemout ShouldContainSubstring "applicationKey: YWs="'
+
+  - name: existingSecret suppresses Secret creation
+    steps:
+      - script: >
+          {{.helmBin}} template venom {{.chartDir}}
+          --set ovhCredentials.existingSecret=my-secret
+        assertions:
+          - result.code ShouldEqual 0
+          - 'result.systemout ShouldNotContainSubstring "kind: Secret"'

@@ -78,6 +78,17 @@ test-e2e: manifests generate fmt vet ## Run the e2e tests. Expected an isolated 
 	}
 	go test ./test/e2e/ -v -ginkgo.v
 
+## Venom binary to use for the integration suites
+VENOM ?= venom
+
+.PHONY: venom-test-chart
+venom-test-chart: ## Run the Helm chart Venom suite (needs helm only).
+	cd tests/venom && $(VENOM) run 01-helm-chart.yml
+
+.PHONY: venom-test-e2e
+venom-test-e2e: ## Run the operator e2e Venom suite (needs a kubectl context and tests/venom/variables.yaml, see tests/venom/README.md).
+	cd tests/venom && $(VENOM) run 02-operator-e2e.yml --var-from-file variables.yaml
+
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter
 	$(GOLANGCI_LINT) run

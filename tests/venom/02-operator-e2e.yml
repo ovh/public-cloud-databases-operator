@@ -1,0 +1,119 @@
+name: Operator end-to-end
+description: |
+  Deploys the operator with the Helm chart onto the current kubectl context,
+  then exercises its features against a real OVHcloud managed database:
+    - node/gateway IPs of the cluster are authorized on the service
+    - IP restrictions owned by someone else (another cluster, the console)
+      are preserved by reconciliation and by cleanup
+    - deleting the Database CR removes the operator-owned entries only
+  Requirements: a reachable Kubernetes cluster (current kubectl context),
+  and a variables file providing OVH credentials and a target service —
+  see variables.yaml.example. The target database service must be
+  dedicated to the test: its IP restrictions are wiped at the end.
+
+vars:
+  helmBin: helm
+  chartDir: ../../deploy/public-cloud-databases-operator
+  namespace: pcdb-venom
+  release: pcdb-venom
+  crName: venom-db
+  foreignIp: 192.0.2.200/32
+  foreignDescription: venom-foreign-entry
+
+testcases:
+  - name: preflight
+    steps:
+      - script: kubectl cluster-info
+        assertions:
+          - result.code ShouldEqual 0
+      - type: ovhapi
+        method: GET
+        path: /cloud/project/{{.projectId}}/database/service/{{.serviceId}}
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.status ShouldEqual READY
+
+  - name: install operator with the chart
+    steps:
+      - script: >
+          {{.helmBin}} upgrade --install {{.release}} {{.chartDir}}
+          --namespace {{.namespace}} --create-namespace
+          --set ovhCredentials.region={{.ovh.endpoint}}
+          --set ovhCredentials.applicationKey={{.ovh.applicationKey}}
+          --set ovhCredentials.applicationSecret={{.ovh.applicationSecret}}
+          --set ovhCredentials.consumerKey={{.ovh.consumerKey}}
+          --wait --timeout 5m
+        assertions:
+          - result.code ShouldEqual 0
+      - script: kubectl rollout status -n {{.namespace}} deployment -l app.kubernetes.io/part-of=public-cloud-databases-operator --timeout=120s
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: seed a foreign ip restriction
+    steps:
+      # Simulates an entry owned by someone else (console user, another
+      # cluster's operator). The operator must never touch it.
+      - type: ovhapi
+        method: PUT
+        path: /cloud/project/{{.projectId}}/database/{{.engine}}/{{.serviceId}}
+        body: >
+          {"ipRestrictions":[{"ip":"{{.foreignIp}}","description":"{{.foreignDescription}}"}]}
+        assertions:
+          - result.statuscode ShouldEqual 200
+
+  - name: database CR authorizes the cluster on the service
+    steps:
+      - script: |
+          kubectl apply -f - <<EOF
+          apiVersion: cloud.ovh.net/v1alpha1
+          kind: Database
+          metadata:
+            name: {{.crName}}
+            namespace: {{.namespace}}
+          spec:
+            projectId: {{.projectId}}
+            serviceId: {{.serviceId}}
+          EOF
+        assertions:
+          - result.code ShouldEqual 0
+      - type: ovhapi
+        method: GET
+        path: /cloud/project/{{.projectId}}/database/service/{{.serviceId}}
+        retry: 36
+        delay: 5
+        assertions:
+          - result.statuscode ShouldEqual 200
+          # the operator authorized the cluster with its ownership marker
+          - result.body ShouldContainSubstring K8S-CDB-Operator
+          # and preserved the foreign entry (multicluster guarantee)
+          - result.body ShouldContainSubstring {{.foreignDescription}}
+
+  - name: deleting the CR cleans up only operator-owned entries
+    steps:
+      - script: kubectl delete database {{.crName}} -n {{.namespace}} --wait=true
+        assertions:
+          - result.code ShouldEqual 0
+      - type: ovhapi
+        method: GET
+        path: /cloud/project/{{.projectId}}/database/service/{{.serviceId}}
+        retry: 36
+        delay: 5
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldNotContainSubstring K8S-CDB-Operator
+          - result.body ShouldContainSubstring {{.foreignDescription}}
+
+  - name: teardown
+    steps:
+      - type: ovhapi
+        method: PUT
+        path: /cloud/project/{{.projectId}}/database/{{.engine}}/{{.serviceId}}
+        body: '{"ipRestrictions":[]}'
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - script: '{{.helmBin}} uninstall {{.release}} --namespace {{.namespace}}'
+        assertions:
+          - result.code ShouldEqual 0
+      - script: kubectl delete namespace {{.namespace}} --wait=false
+        assertions:
+          - result.code ShouldEqual 0
