@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/netip"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -157,12 +158,8 @@ func (r *DatabaseReconciler) cleanupIpRestrictions(ctx context.Context, crd *v1a
 			return err
 		}
 
-		remaining := make([]IpRestriction, 0)
-		for _, ip := range cluster.Ips {
-			if !strings.HasPrefix(ip.Description, ipRestrictionPrefix) || !strings.Contains(ip.Description, string(crd.UID)) {
-				remaining = append(remaining, ip)
-			}
-		}
+		// no desired IP on deletion, so this keeps only what belongs to someone else
+		remaining := mergeIpRestrictions(ctx, nil, cluster.Ips, *crd)
 
 		logger.Info(fmt.Sprintf("cleanup: removing IPs for CRD %s, %d IPs remaining", crd.UID, len(remaining)))
 		if err := UpdateClusterNodeIps(ctx, r, crd.Spec.ProjectId, serviceId, cluster.Engine, remaining); err != nil {
@@ -180,25 +177,24 @@ func (r *DatabaseReconciler) UpdateServiceIpRestriction(ctx context.Context, crd
 	}
 	logger.V(1).Info(fmt.Sprintf("Old IPs: %+v", cluster.Ips))
 
-	newIPs, err := getKubeInternalAddress(ctx, nodes, crd)
+	desiredIPs, err := getKubeInternalAddress(ctx, nodes, crd)
 	if err != nil {
 		return err
 	}
 
 	// if db is public get kube node public ip
 	if cluster.NetworkType == "public" {
-		newIPs, err = getKubePublicAddesses(ctx, nodes, crd, newIPs)
+		desiredIPs, err = getKubePublicAddesses(ctx, nodes, crd, desiredIPs)
 		if err != nil {
 			return err
 		}
 	}
 
-	for _, ip := range cluster.Ips {
-		if !strings.HasPrefix(ip.Description, ipRestrictionPrefix) || !strings.Contains(ip.Description, string(crd.UID)) {
-			newIPs = append(newIPs, ip)
-		}
-	}
+	// IPs declared on the CR are authorized on top of the ones discovered from the nodes.
+	// This has to run after getKubePublicAddesses, which may reset the list to the sole GW IP.
+	desiredIPs = append(desiredIPs, getAdditionalAddresses(ctx, crd)...)
 
+	newIPs := mergeIpRestrictions(ctx, desiredIPs, cluster.Ips, crd)
 	logger.V(1).Info(fmt.Sprintf("New IPs: %+v", newIPs))
 	return UpdateClusterNodeIps(ctx, r, projectId, serviceId, cluster.Engine, newIPs)
 }
@@ -300,8 +296,113 @@ func getKubePublicAddesses(ctx context.Context, nodes corev1.NodeList, crd v1alp
 	return newIPs, nil
 }
 
+// getAdditionalAddresses returns the IP restrictions for spec.additionalIps. It
+// authorizes hosts the operator cannot discover from the Kubernetes API, such as a
+// bastion, a CI runner or a VPN endpoint.
+//
+// The CRD pattern keeps grossly malformed values out at admission time, but it cannot
+// tell a real IP from something merely shaped like one, so entries are parsed again
+// here. An unparseable entry is logged and skipped rather than failing the
+// reconciliation: a typo on one CR must not stop the others from being processed.
+//
+// Duplicates are not filtered here, mergeIpRestrictions does it for every source at once.
+func getAdditionalAddresses(ctx context.Context, crd v1alpha1.Database) []IpRestriction {
+	logger := log.FromContext(ctx)
+
+	additionalIPs := make([]IpRestriction, 0, len(crd.Spec.AdditionalIps))
+	for _, entry := range crd.Spec.AdditionalIps {
+		ip, err := parseIpBlock(strings.TrimSpace(entry))
+		if err != nil {
+			logger.Error(err, "ignoring entry of spec.additionalIps")
+			continue
+		}
+		additionalIPs = append(additionalIPs, IpRestriction{IP: ip, Description: AdditionalIpRestrictionDescription(crd)})
+	}
+
+	logger.V(1).Info(fmt.Sprintf("New IPs (Additional): %+v", additionalIPs))
+	return additionalIPs
+}
+
+// mergeIpRestrictions builds the ipRestrictions payload for one service out of the IPs
+// this CR wants authorized and the IPs already on the service.
+//
+// The whole list is sent on every write and the API rejects a payload carrying the same
+// IP twice, so the merge deduplicates by IP across every source at once: node to node
+// (two nodes can share an egress IP), node to spec.additionalIps, and ours to an entry
+// already on the service.
+//
+// Entries the operator did not create for this CR are kept untouched, and they win over
+// a desired IP that collides with them. The IP ends up authorized either way, so keeping
+// the existing description means the operator neither takes over a restriction it did
+// not create, whether it came from the console or from another Database CR targeting the
+// same service, nor deletes it when this CR goes away.
+func mergeIpRestrictions(ctx context.Context, desired []IpRestriction, existing []IpRestriction, crd v1alpha1.Database) []IpRestriction {
+	logger := log.FromContext(ctx)
+
+	seen := make(map[string]struct{}, len(existing)+len(desired))
+
+	foreign := make([]IpRestriction, 0, len(existing))
+	for _, ip := range existing {
+		// our own entries are rebuilt from scratch on every reconciliation
+		if isOwnedDescription(ip.Description, crd) {
+			continue
+		}
+		if _, duplicate := seen[ip.IP]; duplicate {
+			continue
+		}
+		seen[ip.IP] = struct{}{}
+		foreign = append(foreign, ip)
+	}
+
+	merged := make([]IpRestriction, 0, len(desired)+len(foreign))
+	for _, ip := range desired {
+		if _, duplicate := seen[ip.IP]; duplicate {
+			logger.V(1).Info(fmt.Sprintf("IP %s is already authorized, not adding %s", ip.IP, ip.Description))
+			continue
+		}
+		seen[ip.IP] = struct{}{}
+		merged = append(merged, ip)
+	}
+
+	return append(merged, foreign...)
+}
+
+// parseIpBlock normalizes a bare IP or a CIDR block into the ipBlock form expected
+// by the OVHcloud API. A bare IP is turned into a single host block.
+func parseIpBlock(entry string) (string, error) {
+	if strings.Contains(entry, "/") {
+		prefix, err := netip.ParsePrefix(entry)
+		if err != nil {
+			return "", fmt.Errorf("invalid CIDR block %q: %w", entry, err)
+		}
+		return prefix.Masked().String(), nil
+	}
+
+	addr, err := netip.ParseAddr(entry)
+	if err != nil {
+		return "", fmt.Errorf("invalid IP address %q: %w", entry, err)
+	}
+	// netip.PrefixFrom would silently drop a zone, and netip.ParsePrefix rejects one
+	// outright, so refuse it here too: a zone is meaningless in an ip restriction.
+	if addr.Zone() != "" {
+		return "", fmt.Errorf("invalid IP address %q: zone identifiers are not supported", entry)
+	}
+	return netip.PrefixFrom(addr, addr.BitLen()).String(), nil
+}
+
 const ipRestrictionPrefix = "K8S-CDB-Operator"
 
 func IpRestrictionDescription(node corev1.Node, crd v1alpha1.Database) string {
 	return fmt.Sprintf("%s_%s_%s_%s", ipRestrictionPrefix, node.Name, crd.UID, node.UID)
+}
+
+// isOwnedDescription reports whether an existing ip restriction was created by this
+// operator for this very CRD, and may therefore be refreshed or removed by it.
+// Entries belonging to another CRD, another cluster or to the user are left alone.
+func isOwnedDescription(description string, crd v1alpha1.Database) bool {
+	return strings.HasPrefix(description, ipRestrictionPrefix) && strings.Contains(description, string(crd.UID))
+}
+
+func AdditionalIpRestrictionDescription(crd v1alpha1.Database) string {
+	return fmt.Sprintf("%s_additionalIp_%s", ipRestrictionPrefix, crd.UID)
 }
