@@ -3,12 +3,13 @@ kind: Database
 metadata:
   name: XXXX
   namespace: XXXX
-  annotations:
-    # optional, IP addresses to authorize besides the ones of the selected nodes
-    databases.cloud.ovh.net/additional-ips: "203.0.113.5, 198.51.100.0/24"
 spec:
   projectId: XXXX
   serviceId: XXX
   labelSelector:
     matchLabels:
       LABELNAME: LABELVALUE
+  # optional, IP addresses to authorize besides the ones of the selected nodes
+  additionalIps:
+    - 203.0.113.5
+    - 198.51.100.0/24
