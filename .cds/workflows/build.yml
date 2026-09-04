@@ -8,6 +8,8 @@ integrations: [artifactory-pu-data-clouddatabases]
 #     OVH API token allowed to create/manage/delete managed Kubernetes
 #     clusters and database services in the test project
 #   project_id: Public Cloud project the e2e suite provisions into
+#   docker_registry: registry host/namespace the Docker job pushes to,
+#     so the e2e runs the operator image built from the same commit
 vars: [pcdb-e2e]
 
 gates:
@@ -55,6 +57,7 @@ jobs:
   E2E:
     runs-on: library/default-vm
     if: ${{ git.ref_type == 'tag' }}
+    needs: [Docker]
     steps:
       - uses: actions/checkout
       - run: |
@@ -73,6 +76,8 @@ jobs:
             consumerKey: "${{ vars.pcdb-e2e.ovh_consumer_key }}"
           projectId: "${{ vars.pcdb-e2e.project_id }}"
           suffix: "${{ cds.run_number }}"
+          imageRepository: "${{ vars.pcdb-e2e.docker_registry }}/public-cloud-databases-operator"
+          imageTag: "${{ git.semver_current }}"
           EOF
           PATH="$PWD/linux-amd64:$PWD:$PATH" make venom-test-e2e
 

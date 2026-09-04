@@ -30,7 +30,14 @@ vars:
   dbFlavor: db1-4
   foreignIp: 192.0.2.200/32
   foreignDescription: venom-foreign-entry
+  additionalIp: 203.0.113.5
+  additionalCidr: 192.0.2.10/24
   kubeconfigFile: ./pcdb-venom.kubeconfig
+  # spec.additionalIps needs an operator image that carries the feature.
+  # Leave empty to use the chart defaults (the released image); CI points
+  # this at the image built from the same commit.
+  imageRepository: ""
+  imageTag: ""
 
 testcases:
   - name: provisionKube
@@ -105,17 +112,40 @@ testcases:
 
   - name: install-operator
     steps:
-      - script: >
-          {{.helmBin}} upgrade --install {{.release}} {{.chartDir}}
-          --kubeconfig {{.kubeconfigFile}}
-          --namespace {{.namespace}} --create-namespace
-          --set ovhCredentials.region={{.ovh.endpoint}}
-          --set ovhCredentials.applicationKey={{.ovh.applicationKey}}
-          --set ovhCredentials.applicationSecret={{.ovh.applicationSecret}}
-          --set ovhCredentials.consumerKey={{.ovh.consumerKey}}
-          --wait --timeout 5m
+      - script: |
+          IMAGE_ARGS=""
+          if [ -n "{{.imageRepository}}" ]; then
+            IMAGE_ARGS="--set image.repository={{.imageRepository}} --set image.tag={{.imageTag}}"
+          fi
+          {{.helmBin}} upgrade --install {{.release}} {{.chartDir}} \
+            --kubeconfig {{.kubeconfigFile}} \
+            --namespace {{.namespace}} --create-namespace \
+            --set ovhCredentials.region={{.ovh.endpoint}} \
+            --set ovhCredentials.applicationKey={{.ovh.applicationKey}} \
+            --set ovhCredentials.applicationSecret={{.ovh.applicationSecret}} \
+            --set ovhCredentials.consumerKey={{.ovh.consumerKey}} \
+            $IMAGE_ARGS \
+            --wait --timeout 5m
         assertions:
           - result.code ShouldEqual 0
+
+  - name: additional-ips-admission
+    steps:
+      # the CRD pattern must reject a malformed entry at apply time
+      - script: |
+          KUBECONFIG={{.kubeconfigFile}} kubectl apply --dry-run=server -f - <<EOF
+          apiVersion: cloud.ovh.net/v1alpha1
+          kind: Database
+          metadata:
+            name: {{.crName}}-invalid
+            namespace: {{.namespace}}
+          spec:
+            projectId: {{.projectId}}
+            additionalIps: ["not-an-ip"]
+          EOF
+        assertions:
+          - result.code ShouldEqual 1
+          - result.systemerr ShouldContainSubstring additionalIps
 
   - name: seed-foreign-restriction
     steps:
@@ -131,6 +161,9 @@ testcases:
 
   - name: cr-authorizes-cluster
     steps:
+      # additionalIps declares a bare IP (must be authorized as /32), a CIDR
+      # with host bits (must be normalized to its network address), and the
+      # foreign entry's own IP (must NOT steal ownership of it)
       - script: |
           KUBECONFIG={{.kubeconfigFile}} kubectl apply -f - <<EOF
           apiVersion: cloud.ovh.net/v1alpha1
@@ -141,6 +174,10 @@ testcases:
           spec:
             projectId: {{.projectId}}
             serviceId: {{.provisionDatabase.serviceId}}
+            additionalIps:
+              - "{{.additionalIp}}"
+              - "{{.additionalCidr}}"
+              - "{{.foreignIp}}"
           EOF
         assertions:
           - result.code ShouldEqual 0
@@ -153,7 +190,42 @@ testcases:
           - result.statuscode ShouldEqual 200
           # the operator authorized the cluster with its ownership marker
           - result.body ShouldContainSubstring K8S-CDB-Operator
-          # and preserved the foreign entry (multicluster guarantee)
+          # the bare additional IP became a host block
+          - result.body ShouldContainSubstring {{.additionalIp}}/32
+          # the CIDR was normalized to its network address
+          - result.body ShouldContainSubstring 192.0.2.0/24
+          - result.body ShouldContainSubstring K8S-CDB-Operator_additionalIp
+          # the foreign entry kept its description although this CR also
+          # declares its IP (no ownership takeover, no duplicate payload)
+          - result.body ShouldContainSubstring {{.foreignDescription}}
+
+  - name: additional-ips-update
+    steps:
+      # dropping an entry from spec.additionalIps must revoke it
+      - script: |
+          KUBECONFIG={{.kubeconfigFile}} kubectl apply -f - <<EOF
+          apiVersion: cloud.ovh.net/v1alpha1
+          kind: Database
+          metadata:
+            name: {{.crName}}
+            namespace: {{.namespace}}
+          spec:
+            projectId: {{.projectId}}
+            serviceId: {{.provisionDatabase.serviceId}}
+            additionalIps:
+              - "{{.additionalCidr}}"
+          EOF
+        assertions:
+          - result.code ShouldEqual 0
+      - type: ovhapi
+        method: GET
+        path: /cloud/project/{{.projectId}}/database/service/{{.provisionDatabase.serviceId}}
+        retry: 36
+        delay: 5
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldNotContainSubstring {{.additionalIp}}
+          - result.body ShouldContainSubstring 192.0.2.0/24
           - result.body ShouldContainSubstring {{.foreignDescription}}
 
   - name: cleanup-on-delete
