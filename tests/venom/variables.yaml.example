@@ -17,6 +17,18 @@ ovh:
 # project. They are billed for the duration of the run (~30-45 min).
 projectId: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 
+# Private registry holding the operator image. In CI these are the
+# Artifactory token injected by the CDS integration, and imageRepository
+# points at the Edge that serves released artifacts, e.g.
+# rt.ovhcloud.tools/pu-data-clouddatabases-docker-release/public-cloud-databases-operator
+# Leave registryUser empty to skip the pull secret and use the chart default
+# image -- note that spec.additionalIps then needs a chart appVersion that
+# already carries the feature.
+# imageRepository: ""
+# imageTag: ""
+# registryUser: ""
+# registryPassword: ""
+
 # Optional overrides (defaults shown)
 # suffix: local          # resource name suffix, set to the CI run number in CDS
 # kubeRegion: GRA9

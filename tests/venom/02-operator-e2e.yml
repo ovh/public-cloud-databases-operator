@@ -38,6 +38,13 @@ vars:
   # this at the image built from the same commit.
   imageRepository: ""
   imageTag: ""
+  # Credentials for that image's registry. The released image is served by a
+  # private Artifactory Edge, which does not allow anonymous pulls, so the
+  # cluster needs a pull secret. Leave registryUser empty to skip the secret
+  # entirely (public image, or the chart defaults).
+  registryUser: ""
+  registryPassword: ""
+  pullSecretName: pcdb-venom-registry
 
 testcases:
   - name: provisionKube
@@ -112,14 +119,54 @@ testcases:
 
   - name: install-operator
     steps:
+      # Release Bundle distribution to the Artifactory Edges is asynchronous, so
+      # the manifest can lag the Release job by a few minutes. Wait for it here
+      # instead of letting helm --wait burn its timeout on ImagePullBackOff.
+      - script: |
+          REPO="{{.imageRepository}}"
+          if [ -z "$REPO" ] || [ -z "{{.registryUser}}" ]; then
+            echo "no private image configured, nothing to wait for"
+            exit 0
+          fi
+          curl -sfI --max-time 30 \
+            -u "{{.registryUser}}:{{.registryPassword}}" \
+            -H 'Accept: application/vnd.docker.distribution.manifest.v2+json' \
+            -H 'Accept: application/vnd.docker.distribution.manifest.list.v2+json' \
+            -H 'Accept: application/vnd.oci.image.index.v1+json' \
+            "https://${REPO%%/*}/v2/${REPO#*/}/manifests/{{.imageTag}}" >/dev/null
+        retry: 20
+        delay: 15
+        assertions:
+          - result.code ShouldEqual 0
       - script: |
           IMAGE_ARGS=""
-          if [ -n "{{.imageRepository}}" ]; then
-            IMAGE_ARGS="--set image.repository={{.imageRepository}} --set image.tag={{.imageTag}}"
+          REPO="{{.imageRepository}}"
+          if [ -n "$REPO" ]; then
+            IMAGE_ARGS="--set image.repository=$REPO --set image.tag={{.imageTag}}"
           fi
+
+          # The pull secret has to exist before the operator pod is scheduled,
+          # so the namespace is created here rather than by --create-namespace.
+          kubectl --kubeconfig {{.kubeconfigFile}} create namespace {{.namespace}} \
+            --dry-run=client -o yaml \
+            | kubectl --kubeconfig {{.kubeconfigFile}} apply -f -
+
+          # Recreated on every run: the Artifactory token it carries is short-lived.
+          # $REPO supplies the registry host, so both are required.
+          if [ -n "{{.registryUser}}" ] && [ -n "$REPO" ]; then
+            kubectl --kubeconfig {{.kubeconfigFile}} --namespace {{.namespace}} \
+              create secret docker-registry {{.pullSecretName}} \
+              --docker-server="${REPO%%/*}" \
+              --docker-username="{{.registryUser}}" \
+              --docker-password="{{.registryPassword}}" \
+              --dry-run=client -o yaml \
+              | kubectl --kubeconfig {{.kubeconfigFile}} apply -f -
+            IMAGE_ARGS="$IMAGE_ARGS --set imagePullSecrets[0].name={{.pullSecretName}}"
+          fi
+
           {{.helmBin}} upgrade --install {{.release}} {{.chartDir}} \
             --kubeconfig {{.kubeconfigFile}} \
-            --namespace {{.namespace}} --create-namespace \
+            --namespace {{.namespace}} \
             --set ovhCredentials.region={{.ovh.endpoint}} \
             --set ovhCredentials.applicationKey={{.ovh.applicationKey}} \
             --set ovhCredentials.applicationSecret={{.ovh.applicationSecret}} \
