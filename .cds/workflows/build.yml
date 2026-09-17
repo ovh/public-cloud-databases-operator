@@ -3,6 +3,15 @@ on: [push]
 
 integrations: [artifactory-pu-data-clouddatabases]
 
+# Variable set holding the e2e credentials, to create in the CDS project:
+#   ovh_application_key / ovh_application_secret / ovh_consumer_key:
+#     OVH API token allowed to create/manage/delete managed Kubernetes
+#     clusters and database services in the test project
+#   project_id: Public Cloud project the e2e suite provisions into
+#   docker_registry: registry host/namespace the Docker job pushes to,
+#     so the e2e runs the operator image built from the same commit
+vars: [pcdb-e2e]
+
 gates:
   manual:
     if: ${{ success() && (git.ref_type == 'tag' || gate.approve) }}
@@ -10,6 +19,19 @@ gates:
       approve:
         type: boolean
 jobs:
+  Test:
+    runs-on: library/default-vm
+    steps:
+      - uses: actions/checkout
+      - run: make test
+      - run: |
+          #!/bin/bash
+          set -e
+          curl -fsSL https://get.helm.sh/helm-v3.18.4-linux-amd64.tar.gz | tar xz
+          curl -fsSL -o venom https://github.com/ovh/venom/releases/download/v1.2.0/venom.linux-amd64
+          chmod +x venom
+          PATH="$PWD/linux-amd64:$PWD:$PATH" make venom-test-chart
+
   Docker:
     runs-on: library/default-vm
     steps:
@@ -29,9 +51,39 @@ jobs:
           chartFolder: ./deploy/public-cloud-databases-operator
           chartVersion: "${{ git.semver_current }}"
 
+  # Full e2e: provisions a managed Kubernetes cluster and a PostgreSQL
+  # service in the test project, checks the ip restriction features, then
+  # deletes everything (~30-45 min). Runs on tags only — it gates Release.
+  E2E:
+    runs-on: library/default-vm
+    if: ${{ git.ref_type == 'tag' }}
+    needs: [Docker]
+    steps:
+      - uses: actions/checkout
+      - run: |
+          #!/bin/bash
+          set -e
+          curl -fsSL https://get.helm.sh/helm-v3.18.4-linux-amd64.tar.gz | tar xz
+          curl -fsSL -o venom https://github.com/ovh/venom/releases/download/v1.2.0/venom.linux-amd64
+          curl -fsSLo kubectl "https://dl.k8s.io/release/v1.32.0/bin/linux/amd64/kubectl"
+          chmod +x venom kubectl
+          command -v jq >/dev/null  # the e2e suite decodes the kubeconfig with jq
+          cat > tests/venom/variables.yaml <<EOF
+          ovh:
+            endpoint: ovh-eu
+            applicationKey: "${{ vars.pcdb-e2e.ovh_application_key }}"
+            applicationSecret: "${{ vars.pcdb-e2e.ovh_application_secret }}"
+            consumerKey: "${{ vars.pcdb-e2e.ovh_consumer_key }}"
+          projectId: "${{ vars.pcdb-e2e.project_id }}"
+          suffix: "${{ cds.run_number }}"
+          imageRepository: "${{ vars.pcdb-e2e.docker_registry }}/public-cloud-databases-operator"
+          imageTag: "${{ git.semver_current }}"
+          EOF
+          PATH="$PWD/linux-amd64:$PWD:$PATH" make venom-test-e2e
+
   Release:
     runs-on: library/default-container
-    needs: [Helm, Docker]
+    needs: [Test, Docker, Helm, E2E]
     gate: manual
     steps:
       - uses: actions/artifactoryRelease

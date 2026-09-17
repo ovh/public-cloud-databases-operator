@@ -1,0 +1,27 @@
+# Copy to variables.yaml (gitignored) and fill in.
+# The OVH API token must be allowed to create/manage/delete managed
+# Kubernetes clusters AND database services in the project:
+#   GET/POST/PUT/DELETE /cloud/project/<projectId>/kube*
+#   GET/POST/PUT/DELETE /cloud/project/<projectId>/database*
+# Create one at https://www.ovh.com/auth/api/createToken
+
+ovh:
+  endpoint: ovh-eu
+  applicationKey: "xxxxxxxxxxxxxxxx"
+  applicationSecret: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  consumerKey: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+# Public Cloud project the suite provisions into.
+# WARNING: the e2e suite CREATES (and deletes) a managed Kubernetes
+# cluster and a PostgreSQL service named pcdb-venom-<suffix> in this
+# project. They are billed for the duration of the run (~30-45 min).
+projectId: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+# Optional overrides (defaults shown)
+# suffix: local          # resource name suffix, set to the CI run number in CDS
+# kubeRegion: GRA9
+# nodeFlavor: b3-8
+# dbRegion: GRA
+# dbVersion: "17"
+# dbFlavor: db1-4
+# helmBin: helm

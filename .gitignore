@@ -27,3 +27,9 @@ Dockerfile.cross
 *.swo
 *~
 .devcontainer
+
+# venom integration tests
+tests/venom/variables.yaml
+tests/venom/venom*.log
+tests/venom/test_results*
+tests/venom/*.kubeconfig

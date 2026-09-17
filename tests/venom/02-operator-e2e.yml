@@ -1,0 +1,260 @@
+name: Operator end-to-end
+description: |
+  Fully self-provisioning end-to-end suite. It creates its own OVHcloud
+  managed Kubernetes cluster and its own PostgreSQL managed database in the
+  given project, installs the operator with the Helm chart, verifies the IP
+  restriction features against the real OVHcloud API, then deletes
+  everything it created.
+    - the cluster IPs get authorized on the service (ip opening)
+    - restrictions owned by someone else are preserved by reconciliation
+      and by cleanup (multicluster guarantee)
+    - deleting the Database CR removes only operator-owned entries
+  Requirements: a variables file with OVH credentials allowed to
+  create/manage/delete managed Kubernetes clusters AND database services in
+  the project — see variables.yaml.example. Runtime is ~30-45 minutes and
+  the created resources are billed until the teardown testcase deletes
+  them. If the suite aborts mid-run, delete the resources named
+  pcdb-venom-<suffix> by hand.
+
+vars:
+  helmBin: helm
+  chartDir: ../../deploy/public-cloud-databases-operator
+  namespace: pcdb-venom
+  release: pcdb-venom
+  crName: venom-db
+  suffix: local
+  kubeRegion: GRA9
+  nodeFlavor: b3-8
+  dbRegion: GRA
+  dbVersion: "17"
+  dbFlavor: db1-4
+  foreignIp: 192.0.2.200/32
+  foreignDescription: venom-foreign-entry
+  additionalIp: 203.0.113.5
+  additionalCidr: 192.0.2.10/24
+  kubeconfigFile: ./pcdb-venom.kubeconfig
+  # spec.additionalIps needs an operator image that carries the feature.
+  # Leave empty to use the chart defaults (the released image); CI points
+  # this at the image built from the same commit.
+  imageRepository: ""
+  imageTag: ""
+
+testcases:
+  - name: provisionKube
+    steps:
+      - type: ovhapi
+        method: POST
+        path: /cloud/project/{{.projectId}}/kube
+        body: >
+          {"name":"pcdb-venom-{{.suffix}}","region":"{{.kubeRegion}}",
+           "nodepool":{"name":"pcdb-venom-{{.suffix}}","flavorName":"{{.nodeFlavor}}","desiredNodes":1}}
+        assertions:
+          - result.statuscode ShouldEqual 200
+        vars:
+          kubeId:
+            from: result.bodyjson.id
+      - type: ovhapi
+        method: GET
+        path: /cloud/project/{{.projectId}}/kube/{{.kubeId}}
+        retry: 80
+        delay: 15
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.status ShouldEqual READY
+      - type: ovhapi
+        method: POST
+        path: /cloud/project/{{.projectId}}/kube/{{.kubeId}}/kubeconfig
+        assertions:
+          - result.statuscode ShouldEqual 200
+        vars:
+          # raw single-line JSON response: venom variable interpolation
+          # collapses newlines, so the multiline content field must be
+          # decoded in the shell step below, not extracted directly
+          kubeconfigRaw:
+            from: result.body
+      - script: |
+          cat > {{.kubeconfigFile}}.json <<'PCDBEOF'
+          {{.kubeconfigRaw}}
+          PCDBEOF
+          jq -r .content {{.kubeconfigFile}}.json > {{.kubeconfigFile}}
+          rm -f {{.kubeconfigFile}}.json
+          chmod 600 {{.kubeconfigFile}}
+          kubectl --kubeconfig {{.kubeconfigFile}} config current-context
+        assertions:
+          - result.code ShouldEqual 0
+      - script: KUBECONFIG={{.kubeconfigFile}} kubectl wait --for=condition=Ready nodes --all --timeout=30s
+        retry: 60
+        delay: 15
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: provisionDatabase
+    steps:
+      - type: ovhapi
+        method: POST
+        path: /cloud/project/{{.projectId}}/database/postgresql
+        body: >
+          {"description":"pcdb-venom-{{.suffix}}","plan":"essential","version":"{{.dbVersion}}",
+           "nodesPattern":{"flavor":"{{.dbFlavor}}","number":1,"region":"{{.dbRegion}}"}}
+        assertions:
+          - result.statuscode ShouldEqual 200
+        vars:
+          serviceId:
+            from: result.bodyjson.id
+      - type: ovhapi
+        method: GET
+        path: /cloud/project/{{.projectId}}/database/service/{{.serviceId}}
+        retry: 100
+        delay: 15
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.status ShouldEqual READY
+
+  - name: install-operator
+    steps:
+      - script: |
+          IMAGE_ARGS=""
+          if [ -n "{{.imageRepository}}" ]; then
+            IMAGE_ARGS="--set image.repository={{.imageRepository}} --set image.tag={{.imageTag}}"
+          fi
+          {{.helmBin}} upgrade --install {{.release}} {{.chartDir}} \
+            --kubeconfig {{.kubeconfigFile}} \
+            --namespace {{.namespace}} --create-namespace \
+            --set ovhCredentials.region={{.ovh.endpoint}} \
+            --set ovhCredentials.applicationKey={{.ovh.applicationKey}} \
+            --set ovhCredentials.applicationSecret={{.ovh.applicationSecret}} \
+            --set ovhCredentials.consumerKey={{.ovh.consumerKey}} \
+            $IMAGE_ARGS \
+            --wait --timeout 5m
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: additional-ips-admission
+    steps:
+      # the CRD pattern must reject a malformed entry at apply time
+      - script: |
+          KUBECONFIG={{.kubeconfigFile}} kubectl apply --dry-run=server -f - <<EOF
+          apiVersion: cloud.ovh.net/v1alpha1
+          kind: Database
+          metadata:
+            name: {{.crName}}-invalid
+            namespace: {{.namespace}}
+          spec:
+            projectId: {{.projectId}}
+            additionalIps: ["not-an-ip"]
+          EOF
+        assertions:
+          - result.code ShouldEqual 1
+          - result.systemerr ShouldContainSubstring additionalIps
+
+  - name: seed-foreign-restriction
+    steps:
+      # Simulates an entry owned by someone else (console user, another
+      # cluster's operator). The operator must never touch it.
+      - type: ovhapi
+        method: PUT
+        path: /cloud/project/{{.projectId}}/database/postgresql/{{.provisionDatabase.serviceId}}
+        body: >
+          {"ipRestrictions":[{"ip":"{{.foreignIp}}","description":"{{.foreignDescription}}"}]}
+        assertions:
+          - result.statuscode ShouldEqual 200
+
+  - name: cr-authorizes-cluster
+    steps:
+      # additionalIps declares a bare IP (must be authorized as /32), a CIDR
+      # with host bits (must be normalized to its network address), and the
+      # foreign entry's own IP (must NOT steal ownership of it)
+      - script: |
+          KUBECONFIG={{.kubeconfigFile}} kubectl apply -f - <<EOF
+          apiVersion: cloud.ovh.net/v1alpha1
+          kind: Database
+          metadata:
+            name: {{.crName}}
+            namespace: {{.namespace}}
+          spec:
+            projectId: {{.projectId}}
+            serviceId: {{.provisionDatabase.serviceId}}
+            additionalIps:
+              - "{{.additionalIp}}"
+              - "{{.additionalCidr}}"
+              - "{{.foreignIp}}"
+          EOF
+        assertions:
+          - result.code ShouldEqual 0
+      - type: ovhapi
+        method: GET
+        path: /cloud/project/{{.projectId}}/database/service/{{.provisionDatabase.serviceId}}
+        retry: 36
+        delay: 5
+        assertions:
+          - result.statuscode ShouldEqual 200
+          # the operator authorized the cluster with its ownership marker
+          - result.body ShouldContainSubstring K8S-CDB-Operator
+          # the bare additional IP became a host block
+          - result.body ShouldContainSubstring {{.additionalIp}}/32
+          # the CIDR was normalized to its network address
+          - result.body ShouldContainSubstring 192.0.2.0/24
+          - result.body ShouldContainSubstring K8S-CDB-Operator_additionalIp
+          # the foreign entry kept its description although this CR also
+          # declares its IP (no ownership takeover, no duplicate payload)
+          - result.body ShouldContainSubstring {{.foreignDescription}}
+
+  - name: additional-ips-update
+    steps:
+      # dropping an entry from spec.additionalIps must revoke it
+      - script: |
+          KUBECONFIG={{.kubeconfigFile}} kubectl apply -f - <<EOF
+          apiVersion: cloud.ovh.net/v1alpha1
+          kind: Database
+          metadata:
+            name: {{.crName}}
+            namespace: {{.namespace}}
+          spec:
+            projectId: {{.projectId}}
+            serviceId: {{.provisionDatabase.serviceId}}
+            additionalIps:
+              - "{{.additionalCidr}}"
+          EOF
+        assertions:
+          - result.code ShouldEqual 0
+      - type: ovhapi
+        method: GET
+        path: /cloud/project/{{.projectId}}/database/service/{{.provisionDatabase.serviceId}}
+        retry: 36
+        delay: 5
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldNotContainSubstring {{.additionalIp}}
+          - result.body ShouldContainSubstring 192.0.2.0/24
+          - result.body ShouldContainSubstring {{.foreignDescription}}
+
+  - name: cleanup-on-delete
+    steps:
+      - script: KUBECONFIG={{.kubeconfigFile}} kubectl delete database {{.crName}} -n {{.namespace}} --wait=true
+        assertions:
+          - result.code ShouldEqual 0
+      - type: ovhapi
+        method: GET
+        path: /cloud/project/{{.projectId}}/database/service/{{.provisionDatabase.serviceId}}
+        retry: 36
+        delay: 5
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldNotContainSubstring K8S-CDB-Operator
+          - result.body ShouldContainSubstring {{.foreignDescription}}
+
+  - name: teardown
+    steps:
+      - type: ovhapi
+        method: DELETE
+        path: /cloud/project/{{.projectId}}/database/postgresql/{{.provisionDatabase.serviceId}}
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: ovhapi
+        method: DELETE
+        path: /cloud/project/{{.projectId}}/kube/{{.provisionKube.kubeId}}
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - script: rm -f {{.kubeconfigFile}}
+        assertions:
+          - result.code ShouldEqual 0
