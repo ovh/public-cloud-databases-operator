@@ -53,11 +53,18 @@ jobs:
 
   # Full e2e: provisions a managed Kubernetes cluster and a PostgreSQL
   # service in the test project, checks the ip restriction features, then
-  # deletes everything (~30-45 min). Runs on tags only — it gates Release.
+  # deletes everything (~30-45 min). Runs on tags only.
+  #
+  # It runs AFTER Release, not before: the cluster pulls the operator image
+  # from an Artifactory Edge, and only released artifacts are distributed
+  # there — a snapshot image is unreachable from outside the internal
+  # network whatever credentials the cluster holds. The consequence is that
+  # this job verifies a release that is already published, so a failure here
+  # means superseding that version rather than blocking it.
   E2E:
     runs-on: library/default-vm
     if: ${{ git.ref_type == 'tag' }}
-    needs: [Docker]
+    needs: [Release]
     steps:
       - uses: actions/checkout
       - run: |
@@ -68,6 +75,10 @@ jobs:
           curl -fsSLo kubectl "https://dl.k8s.io/release/v1.32.0/bin/linux/amd64/kubectl"
           chmod +x venom kubectl
           command -v jq >/dev/null  # the e2e suite decodes the kubeconfig with jq
+          # docker_registry is the image repository prefix on the Edge, e.g.
+          # rt.ovhcloud.tools/pu-data-clouddatabases-docker-release. The pull
+          # secret needs the bare host, so it is split off here.
+          REGISTRY_PREFIX="${{ vars.pcdb-e2e.docker_registry }}"
           cat > tests/venom/variables.yaml <<EOF
           ovh:
             endpoint: ovh-eu
@@ -76,14 +87,16 @@ jobs:
             consumerKey: "${{ vars.pcdb-e2e.ovh_consumer_key }}"
           projectId: "${{ vars.pcdb-e2e.project_id }}"
           suffix: "${{ cds.run_number }}"
-          imageRepository: "${{ vars.pcdb-e2e.docker_registry }}/public-cloud-databases-operator"
+          imageRepository: "${REGISTRY_PREFIX}/public-cloud-databases-operator"
           imageTag: "${{ git.semver_current }}"
+          registryUser: "${CDS_INTEGRATION_ARTIFACT_MANAGER_TOKEN_NAME}"
+          registryPassword: "${CDS_INTEGRATION_ARTIFACT_MANAGER_TOKEN}"
           EOF
           PATH="$PWD/linux-amd64:$PWD:$PATH" make venom-test-e2e
 
   Release:
     runs-on: library/default-container
-    needs: [Test, Docker, Helm, E2E]
+    needs: [Test, Docker, Helm]
     gate: manual
     steps:
       - uses: actions/artifactoryRelease
