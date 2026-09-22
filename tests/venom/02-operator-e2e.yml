@@ -24,7 +24,10 @@ vars:
   crName: venom-db
   suffix: local
   kubeRegion: GRA9
-  nodeFlavor: b3-8
+  # b3-8 is not an MKS flavor in any region (SBG5 only offers b3-32 and
+  # b3-128, GRA9 none at all), which made POST /kube fail with a bare 400.
+  # Check with GET /cloud/project/<id>/capabilities/kube/flavors?region=<region>
+  nodeFlavor: b2-7
   dbRegion: GRA
   dbVersion: "17"
   dbFlavor: db1-4
@@ -55,6 +58,8 @@ testcases:
         body: >
           {"name":"pcdb-venom-{{.suffix}}","region":"{{.kubeRegion}}",
            "nodepool":{"name":"pcdb-venom-{{.suffix}}","flavorName":"{{.nodeFlavor}}","desiredNodes":1}}
+        info:
+          - "POST /kube -> {{.result.statuscode}} {{.result.body}}"
         assertions:
           - result.statuscode ShouldEqual 200
         vars:
@@ -103,6 +108,8 @@ testcases:
         body: >
           {"description":"pcdb-venom-{{.suffix}}","plan":"essential","version":"{{.dbVersion}}",
            "nodesPattern":{"flavor":"{{.dbFlavor}}","number":1,"region":"{{.dbRegion}}"}}
+        info:
+          - "POST /database/postgresql -> {{.result.statuscode}} {{.result.body}}"
         assertions:
           - result.statuscode ShouldEqual 200
         vars:
