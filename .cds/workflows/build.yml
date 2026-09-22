@@ -19,8 +19,11 @@ gates:
       approve:
         type: boolean
 jobs:
+  # default-vm carries no Go toolchain, so make test could never run there.
+  # Docker stays on default-vm: it needs a daemon, which the container
+  # models do not provide.
   Test:
-    runs-on: library/default-vm
+    runs-on: library/go-1-26
     steps:
       - uses: actions/checkout
       - run: make test
